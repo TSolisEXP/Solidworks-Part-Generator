@@ -1,0 +1,22 @@
+# CAD Reconstructor dependencies
+#
+# IMPORTANT: pythonocc-core must be installed via conda, NOT pip:
+#   conda install -c conda-forge pythonocc-core
+#
+# All other packages below can be installed via pip:
+#   pip install -r requirements.txt
+
+# SolidWorks COM automation (Windows only)
+pywin32
+
+# Claude API
+anthropic
+
+# Numerics
+numpy
+
+# Optional: structured validation (not used for core dataclasses, but available)
+pydantic
+
+# CLI output
+rich
