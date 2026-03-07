@@ -187,22 +187,27 @@ def _plan_manual(geometry) -> "ReconstructionPlan":
     Print the Claude prompt, wait for the user to paste the JSON response,
     and parse it into a ReconstructionPlan. No API key required.
     """
+    from planner.prompts import SYSTEM_PROMPT
     prompt = build_user_prompt(geometry)
 
+    # Combine system instructions + user message into one block for Claude.ai
+    combined = f"{SYSTEM_PROMPT}\n\n---\n\n{prompt}"
+
     console.print()
-    console.rule("[bold yellow]MANUAL MODE — Copy the prompt below into Claude.ai[/bold yellow]")
-    console.print()
-    console.print(prompt)
-    console.rule("[bold yellow]END OF PROMPT[/bold yellow]")
-    console.print()
+    console.rule("[bold yellow]MANUAL MODE[/bold yellow]")
     console.print(
-        "[bold]Steps:[/bold]\n"
-        "  1. Copy everything between the lines above\n"
-        "  2. Paste it into [link=https://claude.ai]claude.ai[/link] or the Claude desktop app\n"
-        "  3. Copy Claude's entire JSON response\n"
-        "  4. Paste it here, then press [bold]Enter[/bold] twice followed by [bold]Ctrl+Z[/bold] + [bold]Enter[/bold] (Windows) to finish\n"
+        "\n[bold]Instructions:[/bold]\n"
+        "  1. Select and copy everything between the markers below\n"
+        "  2. Paste it as a single message into claude.ai\n"
+        "  3. Copy Claude's entire JSON response (starting with {)\n"
+        "  4. Paste it here, then press [bold]Enter[/bold] + [bold]Ctrl+Z[/bold] + [bold]Enter[/bold] to finish\n"
     )
-    console.rule("[bold green]Paste Claude's JSON response below[/bold green]")
+    console.rule("[bold green]▼ COPY FROM HERE ▼[/bold green]")
+    # Print as plain text so it's easy to select
+    print(combined)
+    console.rule("[bold green]▲ COPY TO HERE ▲[/bold green]")
+    console.print()
+    console.rule("[bold cyan]Paste Claude's JSON response below[/bold cyan]")
 
     lines = []
     try:

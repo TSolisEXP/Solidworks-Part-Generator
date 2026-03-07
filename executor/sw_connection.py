@@ -4,7 +4,9 @@ SolidWorks COM connection manager.
 Requires pywin32 and a licensed SolidWorks installation on Windows.
 """
 
+import glob
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -70,12 +72,14 @@ class SolidWorksConnection:
         if self._app is None:
             self.connect()
 
-        self._app.NewDocument(self.template_path, 0, 0, 0)
+        template = self._resolve_template()
+        logger.info("Using part template: %s", template)
+        self._app.NewDocument(template, 0, 0, 0)
         self._part = self._app.ActiveDoc
 
         if self._part is None:
             raise RuntimeError(
-                f"Failed to create new part from template: {self.template_path}\n"
+                f"Failed to create new part from template: {template}\n"
                 "Check that the template path exists and SolidWorks is licensed."
             )
 
@@ -100,6 +104,41 @@ class SolidWorksConnection:
     @property
     def sketch_mgr(self):
         return self._sketch_mgr
+
+    def _resolve_template(self) -> str:
+        """
+        Return the part template path to use.
+        1. If self.template_path exists on disk, use it as-is.
+        2. Otherwise, ask the running SolidWorks app for its default template.
+        3. Fall back to a glob search under C:\\ProgramData\\SolidWorks.
+        """
+        if os.path.isfile(self.template_path):
+            return self.template_path
+
+        # Ask SolidWorks for the default part template path (swDefaultTemplatePart = 1)
+        try:
+            sw_template = self._app.GetUserPreferenceStringValue(1)
+            if sw_template and os.path.isfile(sw_template):
+                logger.info("Using SolidWorks default template: %s", sw_template)
+                return sw_template
+        except Exception:
+            pass
+
+        # Glob search for any Part.prtdot under the SolidWorks ProgramData folder
+        candidates = glob.glob(
+            r"C:\ProgramData\SolidWorks\**\Part.prtdot", recursive=True
+        )
+        if candidates:
+            found = candidates[0]
+            logger.info("Auto-detected template: %s", found)
+            return found
+
+        raise RuntimeError(
+            f"SolidWorks part template not found at '{self.template_path}' and "
+            "could not be auto-detected. Set the SOLIDWORKS_TEMPLATE_PATH "
+            r"environment variable to the full path of your Part.prtdot file "
+            r"(e.g. C:\ProgramData\SolidWorks\SOLIDWORKS 2024\templates\Part.prtdot)."
+        )
 
     def save(self, file_path: str):
         """Save the active part to the given path."""

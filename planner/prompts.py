@@ -26,7 +26,10 @@ PRINCIPLES:
 - Name every feature descriptively
 
 OUTPUT FORMAT:
-Return a JSON object matching this schema exactly:
+Return ONLY a JSON object. No preamble, no explanation, no extra fields, no markdown.
+The JSON must have EXACTLY these top-level keys: summary, base_plane, modeling_strategy, operations, notes.
+Do NOT add any other keys (e.g. do not add "format_version", "units", "validation", "steps", or anything else).
+
 {
   "summary": "Brief description of the part",
   "base_plane": "front" | "top" | "right",
@@ -34,7 +37,7 @@ Return a JSON object matching this schema exactly:
   "operations": [
     {
       "step_number": 1,
-      "operation_type": "<operation enum value>",
+      "operation_type": "<one of the valid values listed below — exact string, no substitutions>",
       "parameters": { },
       "description": "Human-readable description",
       "references": ["names of prior features this depends on"]
@@ -43,11 +46,20 @@ Return a JSON object matching this schema exactly:
   "notes": ["Any caveats or alternative approaches"]
 }
 
-VALID OPERATION TYPES:
-new_sketch, sketch_line, sketch_rectangle, sketch_circle, sketch_arc,
-sketch_dimension, sketch_constraint, close_sketch,
-extrude_boss, extrude_cut, revolve_boss, revolve_cut,
-fillet, chamfer, hole_wizard, linear_pattern, circular_pattern, mirror, shell
+VALID OPERATION TYPES (use the exact string value — no aliases, no abbreviations):
+  new_sketch, sketch_line, sketch_rectangle, sketch_circle, sketch_arc,
+  sketch_dimension, sketch_constraint, close_sketch,
+  extrude_boss, extrude_cut, revolve_boss, revolve_cut,
+  fillet, chamfer, hole_wizard, linear_pattern, circular_pattern, mirror, shell
+
+EXAMPLES of correct "operation_type" values:
+  CORRECT: "extrude_boss"   WRONG: "extrude", "boss", "Extrude Boss"
+  CORRECT: "hole_wizard"    WRONG: "hole", "drill", "Hole"
+  CORRECT: "new_sketch"     WRONG: "sketch", "create_sketch"
+  CORRECT: "close_sketch"   WRONG: "end_sketch", "finish_sketch"
+
+Each SolidWorks modeling step must be broken into individual operations.
+A sketch + extrude requires at minimum: new_sketch → sketch_rectangle (or sketch_circle etc.) → close_sketch → extrude_boss.
 
 PARAMETER SCHEMAS BY OPERATION TYPE:
 

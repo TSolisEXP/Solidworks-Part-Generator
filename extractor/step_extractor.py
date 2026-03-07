@@ -38,21 +38,31 @@ try:
         GeomAbs_Ellipse,
         GeomAbs_BSplineCurve,
     )
-    from OCC.Core.BRepGProp import brepgprop_VolumeProperties, brepgprop_SurfaceProperties
     from OCC.Core.GProp import GProp_GProps
     from OCC.Core.Bnd import Bnd_Box
-    from OCC.Core.BRepBndLib import brepbndlib_Add
+    # BRepGProp: function names differ between pythonocc versions — try both
+    try:
+        from OCC.Core.BRepGProp import brepgprop_VolumeProperties, brepgprop_SurfaceProperties
+    except ImportError:
+        from OCC.Core.BRepGProp import BRepGProp_VolumeProperties as brepgprop_VolumeProperties, \
+            BRepGProp_SurfaceProperties as brepgprop_SurfaceProperties
+    # BRepBndLib: same issue
+    try:
+        from OCC.Core.BRepBndLib import brepbndlib_Add
+    except ImportError:
+        from OCC.Core.BRepBndLib import BRepBndLib_Add as brepbndlib_Add
     from OCC.Core.BRep import BRep_Tool
-    from OCC.Core.TopoDS import topods_Face, topods_Edge
+    from OCC.Core.TopoDS import topods  # topods.Face(), topods.Edge() in pythonocc 7.7+
     from OCC.Core.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
     from OCC.Core.TopExp import topexp_MapShapesAndAncestors
 
     _OCC_AVAILABLE = True
-except ImportError:
+except Exception as _occ_import_error:
     _OCC_AVAILABLE = False
     logger.warning(
-        "pythonOCC (pythonocc-core) is not installed. "
-        "Install via: conda install -c conda-forge pythonocc-core"
+        "pythonOCC import failed: %s\n"
+        "Install via: conda install -c conda-forge pythonocc-core",
+        _occ_import_error,
     )
 
 
@@ -158,7 +168,7 @@ class StepExtractor:
 
         explorer = TopExp_Explorer(shape, TopAbs_FACE)
         while explorer.More():
-            topo_face = topods_Face(explorer.Current())
+            topo_face = topods.Face(explorer.Current())
             adaptor = BRepAdaptor_Surface(topo_face)
             surf_type = adaptor.GetType()
 
@@ -233,7 +243,7 @@ class StepExtractor:
 
         explorer = TopExp_Explorer(shape, TopAbs_EDGE)
         while explorer.More():
-            topo_edge = topods_Edge(explorer.Current())
+            topo_edge = topods.Edge(explorer.Current())
 
             # Skip degenerate edges (collapsed edges in topology)
             if BRep_Tool.Degenerated(topo_edge):

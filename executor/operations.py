@@ -149,15 +149,17 @@ class SolidWorksExecutor:
         p = op.parameters
         plane_spec = p.get("plane", "front")
 
+        self._part.ClearSelection2(True)
+
         if isinstance(plane_spec, str):
             plane_name = _PLANE_NAMES.get(plane_spec.lower(), swFrontPlane)
-            self._part.Extension.SelectByID2(plane_name, "PLANE", 0, 0, 0, False, 0, None, 0)
+            self._part.Extension.SelectByID2(plane_name, "PLANE", 0.0, 0.0, 0.0, False, 0, None, 0)
         elif isinstance(plane_spec, dict) and plane_spec.get("type") == "face_ref":
             feature_name = plane_spec.get("feature", "")
-            face_index = plane_spec.get("face_index", 0)
-            self._part.Extension.SelectByID2(feature_name, "FACE", 0, 0, 0, False, face_index, None, 0)
+            face_index = int(plane_spec.get("face_index", 0))
+            self._part.Extension.SelectByID2(feature_name, "FACE", 0.0, 0.0, 0.0, False, face_index, None, 0)
         else:
-            self._part.Extension.SelectByID2(swFrontPlane, "PLANE", 0, 0, 0, False, 0, None, 0)
+            self._part.Extension.SelectByID2(swFrontPlane, "PLANE", 0.0, 0.0, 0.0, False, 0, None, 0)
 
         self._smgr.InsertSketch(True)
         return f"Opened sketch on plane: {plane_spec}"
@@ -250,35 +252,49 @@ class SolidWorksExecutor:
         direction = p.get("direction", "normal")
         draft_angle = math.radians(p.get("draft_angle", 0.0))
 
-        end_cond = swEndCondBlind
         if direction == "mid_plane":
-            end_cond = swEndCondMidPlane
+            t1_end = swEndCondMidPlane
+            both = False
+            depth2 = 0.0
+        elif direction == "both":
+            t1_end = swEndCondBlind
+            both = True
+            depth2 = depth
+        else:  # normal / blind
+            t1_end = swEndCondBlind
+            both = False
+            depth2 = 0.0
 
+        # FeatureExtrusion3 — 28 parameters (SolidWorks 2019+ API)
         feature = self._fmgr.FeatureExtrusion3(
-            True,           # SingleDirectionExtrude
-            False,          # IsSolid
-            False,          # IsThin
-            False,          # IsSurface
-            True,           # ReverseDir
-            False,          # BothDirections
-            end_cond,       # StartCondition (swEndCondBlind)
-            end_cond,       # EndCondition
-            depth,          # Depth (metres)
-            0,              # Depth2 (second direction)
-            False,          # FlipSideToMaterial
-            False,          # FlipSideToMaterial2
-            draft_angle,    # DraftAngle
-            0,              # DraftAngle2
-            True,           # StartOffset (MergeResult)
-            False,          # OffsetReverse
-            False,          # TranslateSurface
-            True,           # NormalCut
-            False,          # UseFeatScope
-            True,           # UseAutoSelect
-            0,              # FeatureScope
-            True,           # AssemblyFeatureScope
-            False,          # AutoSelectComponents
-            False,          # PropagateFeatureToParts
+            True,           # 1.  SingleDirectionExtrude
+            True,           # 2.  IsSolid
+            False,          # 3.  IsThin
+            False,          # 4.  IsSurface
+            False,          # 5.  ReverseDir
+            both,           # 6.  BothDirections
+            t1_end,         # 7.  T1EndCondition
+            swEndCondBlind, # 8.  T2EndCondition
+            depth,          # 9.  T1Depth (metres)
+            depth2,         # 10. T2Depth (metres)
+            False,          # 11. T1FlipSideToMaterial
+            False,          # 12. T2FlipSideToMaterial
+            draft_angle,    # 13. T1DraftAngle (radians)
+            0.0,            # 14. T2DraftAngle
+            True,           # 15. T1DraftOutward
+            True,           # 16. T2DraftOutward
+            False,          # 17. T1ThinWallType
+            False,          # 18. T2ThinWallType
+            True,           # 19. Cap1
+            True,           # 20. Cap2
+            True,           # 21. MergeResult
+            False,          # 22. UseFeatScope
+            True,           # 23. UseAutoSelect
+            0,              # 24. T0EndCondition
+            0.0,            # 25. T0Depth
+            False,          # 26. T0FlipSideToMaterial
+            True,           # 27. T0DraftOutward
+            0.0,            # 28. T0DraftAngle
         )
 
         if feature is None:
@@ -441,19 +457,22 @@ class SolidWorksExecutor:
 
         position = p.get("position", [0, 0])
 
+        # HoleWizard5 — 14 parameters (SolidWorks 2019+ API)
         feature = self._fmgr.HoleWizard5(
-            wiz_type,       # HoleType
-            0,              # Standard (0 = none / custom)
-            0,              # FastenerType
-            end_cond,       # EndCondition
-            depth,          # Depth
-            diameter,       # Diameter
-            0,              # DrillAngle (radians)
-            0,              # CounterboreDiameter
-            0,              # CounterboreDepth
-            0,              # CountersinkAngle
-            False,          # ReverseDir
-            False,          # FlipSideToMaterial
+            wiz_type,       # 1.  HoleType (swWzdHoleTypes_e)
+            0,              # 2.  Standard (0 = none / custom)
+            0,              # 3.  FastenerType
+            end_cond,       # 4.  T1EndCondition
+            depth,          # 5.  T1Depth (metres)
+            diameter,       # 6.  Diameter (metres)
+            0.0,            # 7.  DrillAngle (radians)
+            0.0,            # 8.  CounterboreDiameter
+            0.0,            # 9.  CounterboreDepth
+            0.0,            # 10. CountersinkAngle
+            False,          # 11. ReverseDir
+            False,          # 12. FlipSideToMaterial
+            "",             # 13. ConfigName (empty = current config)
+            False,          # 14. AddDim
         )
 
         if feature is None:
