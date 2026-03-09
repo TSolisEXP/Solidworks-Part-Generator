@@ -64,7 +64,8 @@ A sketch + extrude requires at minimum: new_sketch → sketch_rectangle (or sket
 PARAMETER SCHEMAS BY OPERATION TYPE:
 
 new_sketch:
-  plane: "front" | "top" | "right" | {"type": "face_ref", "feature": "...", "face_index": 0}
+  plane: "front" | "top" | "right" | {"type": "face_ref", "feature": "...", "face_point": [x, y, z]}
+  Note: face_point is a point ON the target face in mm (e.g. center of the face). This is required for face_ref.
   transform: {"offset": 0.0}  (optional, for offset planes)
 
 sketch_rectangle:
@@ -121,8 +122,11 @@ hole_wizard:
   type: "simple" | "counterbore" | "countersink" | "tapped"
   diameter: float  (mm)
   depth: float (mm) OR "through_all"
-  position: [x, y]  on sketch plane
+  face_point: [x, y, z]  (a point ON the face where the hole will be placed, in mm)
+  position: [x, y]  (hole center in sketch plane coordinates, mm)
   standard: "ANSI Metric" | "ANSI Inch"  (optional)
+  Note: Do NOT add a new_sketch before hole_wizard. hole_wizard selects its own face
+  and handles the position sketch internally. Place it directly after close_sketch.
 
 linear_pattern:
   feature_ref: "name of feature to pattern"

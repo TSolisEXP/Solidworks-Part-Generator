@@ -16,6 +16,15 @@ from executor.feature_namer import rename_feature
 from executor.sw_connection import SolidWorksConnection
 from models.operations import Operation, OperationType, ReconstructionPlan
 
+try:
+    import pythoncom
+    import win32com.client as _win32
+    # A typed null IDispatch — required for SelectByID2's Callout parameter in SW 2019.
+    # Passing plain Python None sends VT_EMPTY which causes DISP_E_TYPEMISMATCH (0x80020005).
+    _NULL_DISPATCH = _win32.VARIANT(pythoncom.VT_DISPATCH, None)
+except ImportError:
+    _NULL_DISPATCH = None
+
 logger = logging.getLogger(__name__)
 
 # -------------------------------------------------------------------------
@@ -153,13 +162,23 @@ class SolidWorksExecutor:
 
         if isinstance(plane_spec, str):
             plane_name = _PLANE_NAMES.get(plane_spec.lower(), swFrontPlane)
-            self._part.Extension.SelectByID2(plane_name, "PLANE", 0.0, 0.0, 0.0, False, 0, None, 0)
+            self._part.Extension.SelectByID2(plane_name, "PLANE", 0.0, 0.0, 0.0, False, 0, _NULL_DISPATCH, 0)
         elif isinstance(plane_spec, dict) and plane_spec.get("type") == "face_ref":
-            feature_name = plane_spec.get("feature", "")
-            face_index = int(plane_spec.get("face_index", 0))
-            self._part.Extension.SelectByID2(feature_name, "FACE", 0.0, 0.0, 0.0, False, face_index, None, 0)
+            # SW SelectByID2 for faces requires an empty entity name + XYZ coordinates
+            # of any point on the face (in metres). "face_point" is that point in mm.
+            fp = plane_spec.get("face_point", [0, 0, 0])
+            ok = self._part.Extension.SelectByID2(
+                "", "FACE",
+                fp[0] * _MM, fp[1] * _MM, fp[2] * _MM,
+                False, 0, _NULL_DISPATCH, 0,
+            )
+            if not ok:
+                logger.warning(
+                    "face_ref SelectByID2 returned False for face_point=%s — "
+                    "sketch may open on wrong plane", fp,
+                )
         else:
-            self._part.Extension.SelectByID2(swFrontPlane, "PLANE", 0.0, 0.0, 0.0, False, 0, None, 0)
+            self._part.Extension.SelectByID2(swFrontPlane, "PLANE", 0.0, 0.0, 0.0, False, 0, _NULL_DISPATCH, 0)
 
         self._smgr.InsertSketch(True)
         return f"Opened sketch on plane: {plane_spec}"
@@ -265,40 +284,37 @@ class SolidWorksExecutor:
             both = False
             depth2 = 0.0
 
-        # FeatureExtrusion3 — 28 parameters (SolidWorks 2019+ API)
-        feature = self._fmgr.FeatureExtrusion3(
-            True,           # 1.  SingleDirectionExtrude
-            True,           # 2.  IsSolid
-            False,          # 3.  IsThin
-            False,          # 4.  IsSurface
-            False,          # 5.  ReverseDir
-            both,           # 6.  BothDirections
-            t1_end,         # 7.  T1EndCondition
-            swEndCondBlind, # 8.  T2EndCondition
-            depth,          # 9.  T1Depth (metres)
-            depth2,         # 10. T2Depth (metres)
-            False,          # 11. T1FlipSideToMaterial
-            False,          # 12. T2FlipSideToMaterial
-            draft_angle,    # 13. T1DraftAngle (radians)
-            0.0,            # 14. T2DraftAngle
-            True,           # 15. T1DraftOutward
-            True,           # 16. T2DraftOutward
-            False,          # 17. T1ThinWallType
-            False,          # 18. T2ThinWallType
-            True,           # 19. Cap1
-            True,           # 20. Cap2
-            True,           # 21. MergeResult
-            False,          # 22. UseFeatScope
-            True,           # 23. UseAutoSelect
-            0,              # 24. T0EndCondition
-            0.0,            # 25. T0Depth
-            False,          # 26. T0FlipSideToMaterial
-            True,           # 27. T0DraftOutward
-            0.0,            # 28. T0DraftAngle
+        # FeatureExtrusion2 — 23 parameters (confirmed working in SW 2025).
+        # Params 21-23 (T0, StartOffset, FlipStartOffset) are required in SW 2025
+        # even though older SW API docs only show 20 params.
+        feature = self._fmgr.FeatureExtrusion2(
+            True,               # 1.  Sd   — single direction
+            False,              # 2.  Flip — don't flip extrude side
+            False,              # 3.  Dir  — normal to sketch plane
+            t1_end,             # 4.  T1  — end condition, first direction
+            swEndCondBlind,     # 5.  T2  — end condition, second direction
+            depth,              # 6.  D1  — depth, first direction (metres)
+            depth2,             # 7.  D2  — depth, second direction
+            draft_angle != 0,   # 8.  Dchk1 — enable draft, first direction
+            False,              # 9.  Dchk2 — enable draft, second direction
+            True,               # 10. Ddir1 — draft outward, first direction
+            True,               # 11. Ddir2 — draft outward, second direction
+            draft_angle,        # 12. Dang1 — draft angle, first direction (radians)
+            0.0,                # 13. Dang2 — draft angle, second direction
+            False,              # 14. OffsetReverse1
+            False,              # 15. OffsetReverse2
+            False,              # 16. TranslateSurface1
+            False,              # 17. TranslateSurface2
+            True,               # 18. Merge — merge result into existing body
+            False,              # 19. UseFeatScope
+            True,               # 20. UseAutoSelect
+            swStartSketchPlane, # 21. T0  — start condition (swStartSketchPlane=0)
+            0.0,                # 22. StartOffset
+            False,              # 23. FlipStartOffset
         )
 
         if feature is None:
-            raise RuntimeError("FeatureExtrusion3 returned None — sketch may not be closed or selected.")
+            raise RuntimeError("FeatureExtrusion2 returned None — sketch may not be closed or selected.")
 
         rename_feature(feature, op.description or f"Extrude Boss {op.step_number}")
         return f"Extrude boss depth={p.get('depth')} mm"
@@ -314,27 +330,40 @@ class SolidWorksExecutor:
             end_cond = swEndCondBlind
             depth = float(depth_val) * _MM
 
-        feature = self._fmgr.FeatureCut4(
-            True,           # SingleDirectionCut
-            False,          # BothDirections
-            True,           # ReverseDir
-            end_cond,       # EndCondition
-            end_cond,       # EndCondition2
-            depth,          # Depth (metres)
-            0,              # Depth2
-            False,          # FlipSideToMaterial
-            False,          # FlipSideToMaterial2
-            False,          # NormalCut
-            False,          # UseFeatScope
-            True,           # UseAutoSelect
-            0,              # FeatureScope
-            True,           # AssemblyFeatureScope
-            False,          # AutoSelectComponents
-            False,          # PropagateFeatureToParts
+        # FeatureCut3 — 26 parameters (confirmed working in SW 2025).
+        # Base 16 + T0/StartOffset/FlipStartOffset (17-19) + 7 additional params
+        # required by SW 2025 (exact semantics unknown; False works for basic cuts).
+        feature = self._fmgr.FeatureCut3(
+            True,               # 1.  Sd  — single direction
+            False,              # 2.  Flip
+            True,               # 3.  Dir  — into material
+            end_cond,           # 4.  T1  — end condition, first direction
+            end_cond,           # 5.  T2  — end condition, second direction
+            depth,              # 6.  D1  — depth, first direction (metres)
+            0.0,                # 7.  D2  — depth, second direction
+            False,              # 8.  Dchk1
+            False,              # 9.  Dchk2
+            True,               # 10. Ddir1
+            True,               # 11. Ddir2
+            0.0,                # 12. Dang1
+            0.0,                # 13. Dang2
+            False,              # 14. NormalCut
+            False,              # 15. UseFeatScope
+            True,               # 16. UseAutoSelect
+            swStartSketchPlane, # 17. T0  — start condition
+            0.0,                # 18. StartOffset
+            False,              # 19. FlipStartOffset
+            False,              # 20-26: additional params required by SW 2025
+            False,              # 21
+            False,              # 22
+            False,              # 23
+            False,              # 24
+            False,              # 25
+            False,              # 26
         )
 
         if feature is None:
-            raise RuntimeError("FeatureCut4 returned None — sketch may not be closed or selected.")
+            raise RuntimeError("FeatureCut3 returned None — sketch may not be closed or selected.")
 
         rename_feature(feature, op.description or f"Extrude Cut {op.step_number}")
         return f"Extrude cut depth={depth_val}"
@@ -445,38 +474,80 @@ class SolidWorksExecutor:
         depth_val = p.get("depth", "through_all")
         depth = 0.0 if depth_val == "through_all" else float(depth_val) * _MM
         end_cond = swEndCondThroughAll if depth_val == "through_all" else swEndCondBlind
-
-        # Hole Wizard type constants (swWzdHoleTypes_e)
-        hole_type_map = {
-            "simple": 0,
-            "counterbore": 1,
-            "countersink": 2,
-            "tapped": 3,
-        }
-        wiz_type = hole_type_map.get(hole_type, 0)
-
         position = p.get("position", [0, 0])
 
-        # HoleWizard5 — 14 parameters (SolidWorks 2019+ API)
+        # Hole Wizard type constants (swWzdHoleTypes_e): 0=simple, 1=counterbore, 2=countersink, 3=tapped
+        wiz_type = {"simple": 0, "counterbore": 1, "countersink": 2, "tapped": 3}.get(hole_type, 0)
+
+        # SW Hole Wizard workflow:
+        #   1. Ensure no sketch is open (only close if one is actually active)
+        #   2. Select the target face by coordinates
+        #   3. Call HoleWizard5 — SW auto-opens a position sketch
+        #   4. Place a sketch point at the desired hole location
+        #   5. Close the position sketch
+
+        # 1. Close only if a sketch is currently active (InsertSketch(True) would
+        #    OPEN a sketch when not in edit mode — do not call it unconditionally).
+        if self._smgr.ActiveSketch is not None:
+            self._smgr.InsertSketch(True)
+
+        # 2. Select face: face_point is a point on the face in mm
+        fp = p.get("face_point", [0, 0, 0])
+        self._part.ClearSelection2(True)
+        ok = self._part.Extension.SelectByID2(
+            "", "FACE",
+            fp[0] * _MM, fp[1] * _MM, fp[2] * _MM,
+            False, 0, _NULL_DISPATCH, 0,
+        )
+        if not ok:
+            logger.warning("HoleWizard face_point=%s missed — trying bbox fallback", fp)
+            ok = self._select_face_via_bbox()
+        if not ok:
+            logger.warning("HoleWizard: no face selected — hole may fail")
+
+        # 3. Call HoleWizard5 — 27 parameters (confirmed working in SW 2025).
+        # Base 14 + 13 additional params required by SW 2025 (False works for basic holes).
         feature = self._fmgr.HoleWizard5(
-            wiz_type,       # 1.  HoleType (swWzdHoleTypes_e)
-            0,              # 2.  Standard (0 = none / custom)
-            0,              # 3.  FastenerType
-            end_cond,       # 4.  T1EndCondition
-            depth,          # 5.  T1Depth (metres)
-            diameter,       # 6.  Diameter (metres)
-            0.0,            # 7.  DrillAngle (radians)
-            0.0,            # 8.  CounterboreDiameter
-            0.0,            # 9.  CounterboreDepth
-            0.0,            # 10. CountersinkAngle
-            False,          # 11. ReverseDir
-            False,          # 12. FlipSideToMaterial
-            "",             # 13. ConfigName (empty = current config)
-            False,          # 14. AddDim
+            wiz_type,   # 1.  HoleType
+            0,          # 2.  Standard
+            0,          # 3.  FastenerType
+            end_cond,   # 4.  T1EndCondition
+            depth,      # 5.  T1Depth (metres)
+            diameter,   # 6.  Diameter (metres)
+            0.0,        # 7.  DrillAngle
+            0.0,        # 8.  CounterboreDiameter
+            0.0,        # 9.  CounterboreDepth
+            0.0,        # 10. CountersinkAngle
+            False,      # 11. ReverseDir
+            False,      # 12. FlipSideToMaterial
+            False,      # 13. (was ConfigName string in old API; False works in SW 2025)
+            False,      # 14. AddDim
+            False,      # 15-27: additional params required by SW 2025
+            False,      # 16
+            False,      # 17
+            False,      # 18
+            False,      # 19
+            False,      # 20
+            False,      # 21
+            False,      # 22
+            False,      # 23
+            False,      # 24
+            False,      # 25
+            False,      # 26
+            False,      # 27
         )
 
         if feature is None:
-            raise RuntimeError("HoleWizard5 returned None — face/sketch plane may not be selected.")
+            raise RuntimeError("HoleWizard5 returned None — face may not have been selected.")
+
+        # 4. After HoleWizard5, SW opens a position sketch — add a point for the hole center
+        try:
+            self._smgr.CreatePoint(position[0] * _MM, position[1] * _MM, 0.0)
+        except Exception:
+            logger.warning("HoleWizard CreatePoint failed — hole may be placed at origin.")
+
+        # 5. Close the position sketch
+        self._smgr.InsertSketch(True)
 
         rename_feature(feature, op.description or f"Hole Wizard {hole_type} d={p.get('diameter')}mm")
         return f"Hole wizard: {hole_type} d={p.get('diameter')} mm"
@@ -555,6 +626,39 @@ class SolidWorksExecutor:
 
         rename_feature(feature, op.description or f"Mirror {', '.join(feature_refs)}")
         return f"Mirror of {feature_refs} across {plane}"
+
+    def _select_face_via_bbox(self) -> bool:
+        """
+        Fallback face selector: probe the six face-center candidates derived from
+        the part's bounding box and return True on the first successful selection.
+        Used when the planner's face_point misses the actual geometry.
+        """
+        try:
+            box = self._part.GetBox(0)  # returns [xMin,yMin,zMin,xMax,yMax,zMax] in metres
+            if not box or len(box) < 6:
+                return False
+            xMin, yMin, zMin, xMax, yMax, zMax = box[:6]
+            xMid = (xMin + xMax) / 2
+            yMid = (yMin + yMax) / 2
+            zMid = (zMin + zMax) / 2
+            candidates = [
+                (xMid, yMax, zMid),  # top
+                (xMax, yMid, zMid),  # front (extrusion face)
+                (xMid, yMid, zMax),  # right
+                (xMid, yMin, zMid),  # bottom
+                (xMin, yMid, zMid),  # back
+                (xMid, yMid, zMin),  # left
+            ]
+            for cx, cy, cz in candidates:
+                ok = self._part.Extension.SelectByID2(
+                    "", "FACE", cx, cy, cz, False, 0, _NULL_DISPATCH, 0
+                )
+                if ok:
+                    logger.info("HoleWizard bbox fallback selected face near (%g, %g, %g)", cx, cy, cz)
+                    return True
+        except Exception as e:
+            logger.warning("_select_face_via_bbox failed: %s", e)
+        return False
 
     def _shell(self, op: Operation) -> str:
         p = op.parameters

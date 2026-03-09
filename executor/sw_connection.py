@@ -124,9 +124,11 @@ class SolidWorksConnection:
         except Exception:
             pass
 
-        # Glob search for any Part.prtdot under the SolidWorks ProgramData folder
-        candidates = glob.glob(
-            r"C:\ProgramData\SolidWorks\**\Part.prtdot", recursive=True
+        # Glob search for any Part.prtdot under the SolidWorks ProgramData folder.
+        # Sort descending so the newest installed SW version wins (e.g. 2025 > 2019).
+        candidates = sorted(
+            glob.glob(r"C:\ProgramData\SolidWorks\**\Part.prtdot", recursive=True),
+            reverse=True,
         )
         if candidates:
             found = candidates[0]

@@ -116,32 +116,48 @@ class ModelValidator:
     def _get_sw_properties(self, sw_part) -> dict:
         """
         Extract mass/geometric properties from a SolidWorks IModelDoc2 via COM.
-
-        SolidWorks IMassProperty API reference:
-            sw_part.Extension.CreateMassProperty() → IMassProperty
-            .Volume  (m³)
-            .SurfaceArea  (m²)
-            .OverrideMassPropData / GetOverrideMassPropData for bounding box
+        Tries CreateMassProperty() (newer API) then GetMassProperties() (older API).
         """
-        ext = sw_part.Extension
-        mass_prop = ext.CreateMassProperty()
+        volume_mm3 = 0.0
+        surface_area_mm2 = 0.0
 
+        # Attempt 1: CreateMassProperty on Extension (SW 2012+)
+        try:
+            mass_prop = sw_part.Extension.CreateMassProperty()
+            if mass_prop is not None:
+                volume_mm3 = mass_prop.Volume * _M3_TO_MM3
+                surface_area_mm2 = mass_prop.SurfaceArea * _M2_TO_MM2
+        except Exception:
+            mass_prop = None
+
+        # Attempt 2: GetMassProperties on the doc (older API, returns array)
         if mass_prop is None:
-            raise RuntimeError("CreateMassProperty returned None — part may have no solid body.")
+            try:
+                # Returns array: [density, mass, volume, surface_area, cx, cy, cz, ...]
+                props = sw_part.GetMassProperties(0)
+                if props and len(props) >= 4:
+                    volume_mm3 = props[2] * _M3_TO_MM3
+                    surface_area_mm2 = props[3] * _M2_TO_MM2
+            except Exception as e:
+                raise RuntimeError(
+                    f"Both mass property APIs failed. CreateMassProperty unavailable; "
+                    f"GetMassProperties error: {e}"
+                ) from e
 
-        volume_mm3 = mass_prop.Volume * _M3_TO_MM3
-        surface_area_mm2 = mass_prop.SurfaceArea * _M2_TO_MM2
+        # Bounding box: GetBox returns (xmin, ymin, zmin, xmax, ymax, zmax) in metres
+        box = None
+        try:
+            box = sw_part.GetBox(0)
+        except Exception:
+            pass
 
-        # Bounding box: IBody2.GetBodyBox or IModelDoc2.GetBox
-        # GetBox returns (xmin, ymin, zmin, xmax, ymax, zmax) in metres
-        box = sw_part.GetBox(0)  # 0 = tight bounding box
         if box is not None and len(box) >= 6:
             bbox_min = [v * _M_TO_MM for v in box[:3]]
             bbox_max = [v * _M_TO_MM for v in box[3:6]]
         else:
             bbox_min = [0, 0, 0]
             bbox_max = [0, 0, 0]
-            logger.warning("GetBox returned None or unexpected format — bbox comparison will be skipped.")
+            logger.warning("GetBox unavailable — bbox comparison will be skipped.")
 
         return {
             "volume_mm3": volume_mm3,
