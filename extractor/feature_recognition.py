@@ -552,4 +552,34 @@ def _estimate_cylinder_depth(group: list[Face], axis: Vector3D) -> float:
     return max(projections) - min(projections)
 
 
-from typing import Optional  # noqa: E402 (already imported above, harmless)
+def _is_interior_cylinder(
+    center: Vector3D,
+    axis: tuple,
+    radius: float,
+    bb_min: Vector3D,
+    bb_max: Vector3D,
+    threshold: float = 0.25,
+) -> bool:
+    """
+    Return True if the cylinder center is interior to the bounding box in the
+    directions perpendicular to the axis.
+
+    A genuine hole's center must sit at least `radius * threshold` inside the
+    bbox on every perpendicular axis.  Centers on the bbox boundary indicate
+    surface features (edge fillets, rounded corners) rather than drilled holes.
+    """
+    margin = radius * threshold
+    ax = axis  # already a normalized tuple from _normalize_axis
+
+    # For each world axis, if the cylinder axis has a small component in that
+    # direction (i.e. the world axis is mostly perpendicular to the hole axis),
+    # the hole center must be well inside the bbox along that world axis.
+    checks = [
+        (abs(ax[0]) < 0.5, center.x, bb_min.x, bb_max.x),
+        (abs(ax[1]) < 0.5, center.y, bb_min.y, bb_max.y),
+        (abs(ax[2]) < 0.5, center.z, bb_min.z, bb_max.z),
+    ]
+    for is_perp, c, lo, hi in checks:
+        if is_perp and (c < lo + margin or c > hi - margin):
+            return False
+    return True

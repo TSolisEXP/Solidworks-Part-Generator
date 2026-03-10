@@ -131,10 +131,17 @@ class ModelValidator:
             mass_prop = None
 
         # Attempt 2: GetMassProperties on the doc (older API, returns array)
+        # In some SW versions this is a parameterless property; in others a method.
         if mass_prop is None:
             try:
                 # Returns array: [density, mass, volume, surface_area, cx, cy, cz, ...]
-                props = sw_part.GetMassProperties(0)
+                # Try as property first; fall back to method call with arg 0.
+                try:
+                    props = sw_part.GetMassProperties
+                    if callable(props):
+                        props = props(0)
+                except TypeError:
+                    props = sw_part.GetMassProperties(0)
                 if props and len(props) >= 4:
                     volume_mm3 = props[2] * _M3_TO_MM3
                     surface_area_mm2 = props[3] * _M2_TO_MM2
@@ -144,12 +151,18 @@ class ModelValidator:
                     f"GetMassProperties error: {e}"
                 ) from e
 
-        # Bounding box: GetBox returns (xmin, ymin, zmin, xmax, ymax, zmax) in metres
+        # Bounding box: GetBox returns (xmin, ymin, zmin, xmax, ymax, zmax) in metres.
+        # In SW 2025 GetBox is a parameterless method; calling GetBox(0) raises
+        # TypeError because the COM dispatch returns a tuple which Python then
+        # tries to subscript with (0).  Try both forms.
         box = None
         try:
-            box = sw_part.GetBox(0)
+            box = sw_part.GetBox()
         except Exception:
-            pass
+            try:
+                box = sw_part.GetBox(0)
+            except Exception:
+                pass
 
         if box is not None and len(box) >= 6:
             bbox_min = [v * _M_TO_MM for v in box[:3]]

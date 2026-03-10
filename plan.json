@@ -1,0 +1,76 @@
+{
+  "summary": "Prismatic part \u2014 60.0 \u00d7 10.0 \u00d7 12.0 mm",
+  "base_plane": "front",
+  "modeling_strategy": "Prismatic part extruded 10.00 mm from front plane. Profile 60.00 \u00d7 12.00 mm.",
+  "operations": [
+    {
+      "step_number": 1,
+      "operation_type": "new_sketch",
+      "parameters": {
+        "plane": "front"
+      },
+      "description": "Base sketch on front plane",
+      "references": []
+    },
+    {
+      "step_number": 2,
+      "operation_type": "sketch_rectangle",
+      "parameters": {
+        "corner1": [
+          -30.0,
+          -6.0
+        ],
+        "corner2": [
+          30.0,
+          6.0
+        ]
+      },
+      "description": "Base profile 60.00 \u00d7 12.00 mm (from bounding box)",
+      "references": []
+    },
+    {
+      "step_number": 3,
+      "operation_type": "close_sketch",
+      "parameters": {},
+      "description": "Close base sketch",
+      "references": []
+    },
+    {
+      "step_number": 4,
+      "operation_type": "extrude_boss",
+      "parameters": {
+        "depth": 10.0,
+        "direction": "normal"
+      },
+      "description": "Extrude base body 10.00 mm",
+      "references": [
+        "Base_Sketch"
+      ]
+    },
+    {
+      "step_number": 5,
+      "operation_type": "hole_wizard",
+      "parameters": {
+        "type": "simple",
+        "diameter": 10.802,
+        "depth": "through_all",
+        "face_point": [
+          13.941,
+          10.0,
+          -6.0
+        ],
+        "position": [
+          13.941,
+          -6.0
+        ],
+        "standard": "ANSI Metric"
+      },
+      "description": "Hole \u00d810.80 mm through",
+      "references": []
+    }
+  ],
+  "notes": [
+    "Plan generated algorithmically from STEP geometry \u2014 no AI used.",
+    "Verify sketch profile against original STEP before executing."
+  ]
+}

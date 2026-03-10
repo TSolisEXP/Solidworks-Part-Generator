@@ -71,12 +71,16 @@ class AlgorithmicPlanner:
             fid = feat["id"]
             if fid in patterned_ids and fid not in seed_ids:
                 continue  # non-seed patterned hole — emitted via pattern op
-            hole_op = _build_hole_op(feat, geometry, step)
-            feat_name = f"Hole_{step}"
+            hole_ops = _build_hole_ops(feat, geometry)
+            # The extrude_cut is the last op; its step number determines the feature name
+            cut_step = step + len(hole_ops) - 1
+            feat_name = f"Hole_{cut_step}"
+            hole_ops[-1].description = feat_name  # SW will rename cut to this
             hole_name_map[fid] = feat_name
-            hole_op.step_number = step
-            ops.append(hole_op)
-            step += 1
+            for op in hole_ops:
+                op.step_number = step
+                step += 1
+            ops.extend(hole_ops)
 
         # 5. Patterns
         for feat in features:
@@ -113,7 +117,7 @@ class AlgorithmicPlanner:
             f"{dims[0]:.1f} × {dims[1]:.1f} × {dims[2]:.1f} mm"
         )
 
-        notes = _build_notes(geometry, is_turned, base_plane_str)
+        notes = _build_notes(geometry, is_turned, base_plane_str, ops)
 
         return ReconstructionPlan(
             summary=summary,
@@ -535,50 +539,83 @@ def _edge_to_sketch_op(edge, base_plane: str) -> Optional[Operation]:
 # Hole operations
 # ---------------------------------------------------------------------------
 
-def _build_hole_op(feat: dict, geometry: PartGeometry, step: int) -> Operation:
-    """Convert a detected hole feature into a hole_wizard Operation."""
+def _build_hole_ops(feat: dict, geometry: PartGeometry) -> list[Operation]:
+    """
+    Convert a detected hole into sketch + extrude_cut operations.
+    Returns 4 ops: new_sketch, sketch_circle, close_sketch, extrude_cut.
+    Step numbers are left at 0 — caller assigns them.
+    """
     cx, cy, cz = feat["center"]
     ax, ay, az = feat["axis"]
     diameter = feat["diameter"]
     raw_depth = feat.get("depth", "through_all")
     depth = raw_depth if raw_depth == "through_all" else round(float(raw_depth), 3)
 
-    bb_min = geometry.bounding_box_min
-    bb_max = geometry.bounding_box_max
+    # Use the standard reference plane perpendicular to the hole axis.
+    # Avoids SelectByID2 face selection, which fails on freshly extruded solids.
+    # For through_all cuts this works regardless of which face the hole enters from.
+    #
+    # LIMITATION: if the hole axis is not well-aligned with any of the three
+    # origin planes (e.g. a hole drilled into a 45° angled face), this produces
+    # a cylinder perpendicular to the chosen standard plane rather than the true
+    # angled cylinder.  Such holes require a reference plane created via
+    # InsertRefPlane — not yet implemented.  The planner adds a note when it
+    # detects significant axis misalignment.
+    dominant = max(abs(ax), abs(ay), abs(az))
+    alignment_ok = dominant > 0.9  # axis is within ~26° of a principal direction
 
-    # Determine entry face: project hole center to the part surface
-    # along the hole axis direction (axis points along the hole bore).
     if abs(az) >= abs(ax) and abs(az) >= abs(ay):
-        # Z-axis hole → enters top (max Z) or bottom (min Z) face
-        face_z = bb_max.z if az >= 0 else bb_min.z
-        face_point = [round(cx, 3), round(cy, 3), round(face_z, 3)]
-        sketch_pos = [round(cx, 3), round(cy, 3)]
+        # Z-axis hole — sketch on Top plane; sketch coords are (X, Y)
+        plane = "top"
+        circle_center = [round(cx, 3), round(cy, 3)]
     elif abs(ay) >= abs(ax):
-        # Y-axis hole → enters front or back face
-        face_y = bb_max.y if ay >= 0 else bb_min.y
-        face_point = [round(cx, 3), round(face_y, 3), round(cz, 3)]
-        sketch_pos = [round(cx, 3), round(cz, 3)]
+        # Y-axis hole — sketch on Front plane; sketch coords are (X, Z)
+        plane = "front"
+        circle_center = [round(cx, 3), round(cz, 3)]
     else:
-        # X-axis hole → enters left or right face
-        face_x = bb_max.x if ax >= 0 else bb_min.x
-        face_point = [round(face_x, 3), round(cy, 3), round(cz, 3)]
-        sketch_pos = [round(cy, 3), round(cz, 3)]
+        # X-axis hole — sketch on Right plane; sketch coords are (Y, Z)
+        plane = "right"
+        circle_center = [round(cy, 3), round(cz, 3)]
 
     depth_label = "through" if depth == "through_all" else f"{depth:.1f} mm"
-    return Operation(
-        step_number=step,
-        operation_type=OperationType.HOLE_WIZARD,
-        parameters={
-            "type": "simple",
-            "diameter": round(diameter, 3),
-            "depth": depth,
-            "face_point": face_point,
-            "position": sketch_pos,
-            "standard": "ANSI Metric",
-        },
-        description=f"Hole Ø{diameter:.2f} mm {depth_label}",
-        references=[],
-    )
+    hole_label = f"Hole Ø{diameter:.2f} mm {depth_label}"
+
+    return [
+        Operation(
+            step_number=0,
+            operation_type=OperationType.NEW_SKETCH,
+            parameters={"plane": plane},
+            description=f"Hole sketch on {plane} plane",
+            references=[],
+        ),
+        Operation(
+            step_number=0,
+            operation_type=OperationType.SKETCH_CIRCLE,
+            parameters={
+                "center": circle_center,
+                "radius": round(diameter / 2, 3),
+            },
+            description=f"Hole circle Ø{diameter:.2f} mm",
+            references=[],
+        ),
+        Operation(
+            step_number=0,
+            operation_type=OperationType.CLOSE_SKETCH,
+            parameters={},
+            description="Close hole sketch",
+            references=[],
+        ),
+        Operation(
+            step_number=0,
+            operation_type=OperationType.EXTRUDE_CUT,
+            parameters={
+                "depth": depth,
+                "_axis_aligned": alignment_ok,  # False → angled hole, result may be inaccurate
+            },
+            description=hole_label,  # caller may overwrite to set feature name
+            references=[],
+        ),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -686,7 +723,8 @@ def _get_pattern_seed_ids(features: list[dict]) -> set[str]:
 # ---------------------------------------------------------------------------
 
 def _build_notes(
-    geometry: PartGeometry, is_turned: bool, base_plane: str
+    geometry: PartGeometry, is_turned: bool, base_plane: str,
+    ops: list[Operation] | None = None,
 ) -> list[str]:
     notes: list[str] = [
         "Plan generated algorithmically from STEP geometry — no AI used.",
@@ -710,6 +748,21 @@ def _build_notes(
             "Chamfer distance set to 1.0 mm placeholder — "
             "measure actual chamfer from original STEP."
         )
+
+    # Warn about holes whose axes are not aligned with any origin plane
+    if ops:
+        misaligned = [
+            op for op in ops
+            if op.operation_type == OperationType.EXTRUDE_CUT
+            and not op.parameters.get("_axis_aligned", True)
+        ]
+        if misaligned:
+            notes.append(
+                f"{len(misaligned)} hole(s) have axes not aligned with any origin plane. "
+                "The extrude cut was made on the closest standard plane and may be "
+                "inaccurate. Angled holes require a reference plane (InsertRefPlane) "
+                "— not yet automated."
+            )
 
     return notes
 

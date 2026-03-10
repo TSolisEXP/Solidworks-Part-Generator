@@ -220,7 +220,9 @@ class SolidWorksExecutor:
         p = op.parameters
         cx, cy = p.get("center", [0, 0])
         r = p.get("radius", 5.0)
-        circle = self._smgr.CreateCircle(cx * _MM, cy * _MM, 0, r * _MM, 0, 0)
+        # CreateCircle(Xc, Yc, Zc, Xp, Yp, Zp) — last 3 args are a point ON the circle,
+        # not the radius value. Pass (cx+r, cy, 0) to place it directly right of centre.
+        circle = self._smgr.CreateCircle(cx * _MM, cy * _MM, 0, (cx + r) * _MM, cy * _MM, 0)
         if circle is None:
             raise RuntimeError("CreateCircle returned None")
         return f"Circle center=({cx},{cy}) r={r}"
@@ -634,7 +636,11 @@ class SolidWorksExecutor:
         Used when the planner's face_point misses the actual geometry.
         """
         try:
-            box = self._part.GetBox(0)  # returns [xMin,yMin,zMin,xMax,yMax,zMax] in metres
+            try:
+                box = self._part.GetBox()
+            except Exception:
+                box = self._part.GetBox(0)
+            # GetBox returns [xMin,yMin,zMin,xMax,yMax,zMax] in metres
             if not box or len(box) < 6:
                 return False
             xMin, yMin, zMin, xMax, yMax, zMax = box[:6]

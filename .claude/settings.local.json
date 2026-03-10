@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python tools/discover_sw_api.py)",
       "Bash(python -c \"from planner.planner import parse_plan_json; print\\(''planner OK''\\)\")",
-      "Bash(python -c \"import main; print\\(''main OK''\\)\")"
+      "Bash(python -c \"import main; print\\(''main OK''\\)\")",
+      "Bash(python -c \":*)"
     ]
   }
 }
