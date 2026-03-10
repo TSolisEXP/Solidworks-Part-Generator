@@ -53,7 +53,10 @@ try:
         from OCC.Core.BRepBndLib import BRepBndLib_Add as brepbndlib_Add
     from OCC.Core.BRep import BRep_Tool
     from OCC.Core.TopoDS import topods  # topods.Face(), topods.Edge() in pythonocc 7.7+
-    from OCC.Core.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+    from OCC.Core.TopTools import (
+        TopTools_IndexedDataMapOfShapeListOfShape,
+        TopTools_IndexedMapOfShape,
+    )
     from OCC.Core.TopExp import topexp_MapShapesAndAncestors
 
     _OCC_AVAILABLE = True
@@ -105,6 +108,9 @@ class StepExtractor:
         logger.info(
             "Extracted %d faces, %d edges. Volume=%.3f mm³", len(faces), len(edges), volume
         )
+
+        logger.info("Building edge–face adjacency...")
+        self._populate_edge_face_adjacency(shape, edges, faces)
 
         return PartGeometry(
             file_name=self.file_path.name,
@@ -300,6 +306,53 @@ class StepExtractor:
             explorer.Next()
 
         return edges
+
+    def _populate_edge_face_adjacency(
+        self, shape, edges: list[Edge], faces: list[Face]
+    ) -> None:
+        """
+        Populate adjacent_face_ids on every edge AND every face.
+
+        Step 1 – edge→face: builds an IndexedMapOfShape of non-degenerate edges
+        (same traversal order as _extract_edges, so index-1 == edge_id), then
+        iterates over every face registering its id on each of its edges.
+
+        Step 2 – face→face: derives face adjacency from the edge data built in
+        step 1 (two faces are adjacent iff they share at least one edge).
+        """
+        # ---- Step 1: edge → face ------------------------------------------------
+        edge_map = TopTools_IndexedMapOfShape()
+        exp = TopExp_Explorer(shape, TopAbs_EDGE)
+        while exp.More():
+            topo_e = topods.Edge(exp.Current())
+            if not BRep_Tool.Degenerated(topo_e):
+                edge_map.Add(exp.Current())
+            exp.Next()
+
+        face_exp = TopExp_Explorer(shape, TopAbs_FACE)
+        face_id = 0
+        while face_exp.More():
+            e_exp = TopExp_Explorer(face_exp.Current(), TopAbs_EDGE)
+            while e_exp.More():
+                idx = edge_map.FindIndex(e_exp.Current())  # 1-based; 0 = not found
+                if idx > 0:
+                    eid = idx - 1
+                    if eid < len(edges) and face_id not in edges[eid].adjacent_face_ids:
+                        edges[eid].adjacent_face_ids.append(face_id)
+                e_exp.Next()
+            face_id += 1
+            face_exp.Next()
+
+        # ---- Step 2: face → face (via shared edges) ------------------------------
+        from collections import defaultdict as _dd
+        face_nbrs: dict[int, set[int]] = _dd(set)
+        for e in edges:
+            for fid1 in e.adjacent_face_ids:
+                for fid2 in e.adjacent_face_ids:
+                    if fid1 != fid2:
+                        face_nbrs[fid1].add(fid2)
+        for face in faces:
+            face.adjacent_face_ids = list(face_nbrs.get(face.id, set()))
 
     def _detect_symmetry(
         self, faces: list[Face], bb_min: Vector3D, bb_max: Vector3D

@@ -19,7 +19,7 @@ import logging
 import math
 from typing import Optional
 
-from models.geometry import EdgeType, Face, FaceType, PartGeometry, Vector3D
+from models.geometry import Edge, EdgeType, Face, FaceType, PartGeometry, Vector3D
 from models.operations import Operation, OperationType, ReconstructionPlan, SketchPlane
 
 logger = logging.getLogger(__name__)
@@ -82,7 +82,53 @@ class AlgorithmicPlanner:
                 step += 1
             ops.extend(hole_ops)
 
-        # 5. Patterns
+        # 5. Polygon pockets (rectangular, triangular, etc.)
+        edge_by_id: dict[int, Edge] = {e.id: e for e in geometry.edges}
+        for feat in features:
+            if feat["type"] != "polygon_pocket":
+                continue
+            pocket_edges = [edge_by_id[eid] for eid in feat["edge_ids"] if eid in edge_by_id]
+            if not pocket_edges:
+                continue
+            pocket_plane = feat["base_dir"]
+            depth = feat["depth"]
+
+            ops.append(Operation(
+                step_number=step,
+                operation_type=OperationType.NEW_SKETCH,
+                parameters={"plane": pocket_plane},
+                description=f"Polygon pocket sketch on {pocket_plane} plane",
+                references=[],
+            ))
+            step += 1
+
+            for edge in pocket_edges:
+                op = _edge_to_sketch_op(edge, pocket_plane)
+                if op:
+                    op.step_number = step
+                    ops.append(op)
+                    step += 1
+
+            ops.append(Operation(
+                step_number=step,
+                operation_type=OperationType.CLOSE_SKETCH,
+                parameters={},
+                description="Close polygon pocket sketch",
+                references=[],
+            ))
+            step += 1
+
+            ops.append(Operation(
+                step_number=step,
+                operation_type=OperationType.EXTRUDE_CUT,
+                parameters={"depth": round(depth, 3), "_axis_aligned": True},
+                description=f"Polygon pocket cut {depth:.3f} mm "
+                            f"({feat['vertex_count']}-sided)",
+                references=[],
+            ))
+            step += 1
+
+        # 7. Patterns
         for feat in features:
             if feat["type"] == "linear_pattern":
                 seed_id = feat["feature_ids"][0]
@@ -97,13 +143,13 @@ class AlgorithmicPlanner:
                 ops.append(pat_op)
                 step += 1
 
-        # 6. Chamfers (before fillets)
+        # 8. Chamfers (before fillets)
         for feat in features:
             if feat["type"] == "chamfer":
                 ops.append(_build_chamfer_op(feat, step))
                 step += 1
 
-        # 7. Fillets (always last)
+        # 9. Fillets (always last)
         for feat in features:
             if feat["type"] == "fillet":
                 ops.append(_build_fillet_op(feat, step))
@@ -445,8 +491,17 @@ def _extract_sketch_profile(
 ) -> list[Operation]:
     """
     Find the largest planar face perpendicular to the extrude direction,
-    locate its boundary edges, and convert them to sketch operations.
-    Returns an empty list if extraction fails (caller will use fallback).
+    locate its *outer* boundary edges, and convert them to sketch operations.
+
+    Strategy:
+    1. Use topological edge–face adjacency when available.
+       - For a circular base (disc): pick the single largest-radius circle.
+       - For a linear base (rectangle/polygon): return all line edges.
+    2. If adjacency is empty (extractor did not populate it), fall back to a
+       coplanarity search: find circle edges whose centre lies on the
+       outermost face plane, take the largest one.
+    Returns an empty list to signal that the caller should use the
+    bounding-box rectangle fallback.
     """
     normal_map = {
         "top":   Vector3D(0, 0, 1),
@@ -455,7 +510,6 @@ def _extract_sketch_profile(
     }
     target_normal = normal_map[base_plane]
 
-    # Find candidate faces: planar, normal roughly parallel to target
     candidates = [
         f for f in geometry.faces
         if f.face_type == FaceType.PLANAR
@@ -467,21 +521,65 @@ def _extract_sketch_profile(
 
     base_face = max(candidates, key=lambda f: f.area)
 
-    # Edges that border the base face
-    face_edges = [
-        e for e in geometry.edges
-        if base_face.id in e.adjacent_face_ids
-    ]
-    if not face_edges:
+    # --- Path A: topological adjacency populated by the extractor ---
+    face_edges = [e for e in geometry.edges if base_face.id in e.adjacent_face_ids]
+    if face_edges:
+        from models.geometry import EdgeType as ET
+        circle_edges = [e for e in face_edges if e.edge_type == ET.CIRCLE and e.radius]
+        line_edges   = [e for e in face_edges if e.edge_type == ET.LINE]
+
+        if circle_edges:
+            # Disc / cylindrical base: use only the outermost (largest) circle.
+            # Inner circles are boundaries of pockets/holes and must NOT be
+            # included in the base extrude profile.
+            outer = max(circle_edges, key=lambda e: e.radius)
+            op = _edge_to_sketch_op(outer, base_plane)
+            return [op] if op else []
+
+        if line_edges:
+            # Prismatic base: all line edges form the outer boundary.
+            ops = [_edge_to_sketch_op(e, base_plane) for e in line_edges]
+            return [op for op in ops if op is not None]
+
         return []
 
-    ops: list[Operation] = []
-    for edge in face_edges:
-        op = _edge_to_sketch_op(edge, base_plane)
-        if op is not None:
-            ops.append(op)
+    # --- Path B: coplanarity fallback (adjacent_face_ids not populated) ---
+    # Find circle edges whose centre lies on the outermost plane level.
+    bb_min = geometry.bounding_box_min
+    bb_max = geometry.bounding_box_max
+    tol_frac = 0.03  # 3 % of part extent along extrude axis
 
-    return ops
+    if base_plane == "top":
+        plane_pos  = bb_max.z
+        coord_tol  = max((bb_max.z - bb_min.z) * tol_frac, _TOL)
+        coplanar   = [
+            e for e in geometry.edges
+            if e.edge_type == EdgeType.CIRCLE and e.center and e.radius
+            and abs(e.center.z - plane_pos) < coord_tol
+        ]
+    elif base_plane == "front":
+        plane_pos  = bb_max.y
+        coord_tol  = max((bb_max.y - bb_min.y) * tol_frac, _TOL)
+        coplanar   = [
+            e for e in geometry.edges
+            if e.edge_type == EdgeType.CIRCLE and e.center and e.radius
+            and abs(e.center.y - plane_pos) < coord_tol
+        ]
+    else:  # right
+        plane_pos  = bb_max.x
+        coord_tol  = max((bb_max.x - bb_min.x) * tol_frac, _TOL)
+        coplanar   = [
+            e for e in geometry.edges
+            if e.edge_type == EdgeType.CIRCLE and e.center and e.radius
+            and abs(e.center.x - plane_pos) < coord_tol
+        ]
+
+    if coplanar:
+        outer = max(coplanar, key=lambda e: e.radius)
+        op = _edge_to_sketch_op(outer, base_plane)
+        return [op] if op else []
+
+    return []  # caller will use bounding-box rectangle fallback
 
 
 def _edge_to_sketch_op(edge, base_plane: str) -> Optional[Operation]:

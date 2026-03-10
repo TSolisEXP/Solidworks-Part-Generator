@@ -4,7 +4,30 @@
       "Bash(python tools/discover_sw_api.py)",
       "Bash(python -c \"from planner.planner import parse_plan_json; print\\(''planner OK''\\)\")",
       "Bash(python -c \"import main; print\\(''main OK''\\)\")",
-      "Bash(python -c \":*)"
+      "Bash(python -c \":*)",
+      "Bash(python main.py tests/test_models/testpart2.STEP --no-execute --output /tmp/testpart2_plan.json)",
+      "Bash(conda env list)",
+      "Bash(~/AppData/Local/miniconda3/Scripts/conda.exe env list)",
+      "Bash(/c/Users/Tsolis/AppData/Local/miniconda3/Scripts/conda.exe env list)",
+      "Bash(/c/Users/Tsolis/AppData/Local/miniconda3/envs/cad-reconstructor/python.exe main.py tests/test_models/testpart2.STEP --no-execute --output /tmp/testpart2_plan.json)",
+      "Bash(cmd.exe /c \"C:\\\\Users\\\\Tsolis\\\\AppData\\\\Local\\\\miniconda3\\\\envs\\\\cad-reconstructor\\\\python.exe main.py tests/test_models/testpart2.STEP --no-execute --output C:\\\\Temp\\\\testpart2_plan.json 2>&1\")",
+      "Bash(cmd.exe /c \"C:\\\\Users\\\\Tsolis\\\\AppData\\\\Local\\\\miniconda3\\\\envs\\\\cad-reconstructor\\\\python.exe c:\\\\Users\\\\Tsolis\\\\Documents\\\\GitRepos\\\\Solidworks-Part-Generator\\\\main.py c:\\\\Users\\\\Tsolis\\\\Documents\\\\GitRepos\\\\Solidworks-Part-Generator\\\\tests\\\\test_models\\\\testpart2.STEP --no-execute --output C:\\\\Temp\\\\testpart2_plan.json\")",
+      "Bash(cmd.exe /c \"C:\\\\Users\\\\Tsolis\\\\AppData\\\\Local\\\\miniconda3\\\\envs\\\\cad-reconstructor\\\\python.exe c:\\\\Users\\\\Tsolis\\\\Documents\\\\GitRepos\\\\Solidworks-Part-Generator\\\\main.py c:\\\\Users\\\\Tsolis\\\\Documents\\\\GitRepos\\\\Solidworks-Part-Generator\\\\tests\\\\test_models\\\\testpart2.STEP --no-execute --output C:\\\\Temp\\\\testpart2_plan.json && echo DONE\")",
+      "Bash(cmd.exe /c \"cd /d c:\\\\Users\\\\Tsolis\\\\Documents\\\\GitRepos\\\\Solidworks-Part-Generator && C:\\\\Users\\\\Tsolis\\\\AppData\\\\Local\\\\miniconda3\\\\envs\\\\cad-reconstructor\\\\python.exe main.py tests\\\\test_models\\\\testpart2.STEP --no-execute --output C:\\\\Temp\\\\testpart2_plan.json 2>&1 && echo EXIT:0\")",
+      "Bash(echo \"shell exit: $?\")",
+      "Bash(powershell.exe -Command \"& ''C:\\\\Users\\\\Tsolis\\\\AppData\\\\Local\\\\miniconda3\\\\envs\\\\cad-reconstructor\\\\python.exe'' ''c:\\\\Users\\\\Tsolis\\\\Documents\\\\GitRepos\\\\Solidworks-Part-Generator\\\\debug_geom.py'' ''c:\\\\Users\\\\Tsolis\\\\Documents\\\\GitRepos\\\\Solidworks-Part-Generator\\\\tests\\\\test_models\\\\testpart2.STEP'' 2>&1 | Tee-Object -FilePath ''C:\\\\Temp\\\\debug_geom2.txt''\")",
+      "Bash(powershell.exe -NonInteractive -Command \"Set-Location ''c:\\\\Users\\\\Tsolis\\\\Documents\\\\GitRepos\\\\Solidworks-Part-Generator''; & ''C:\\\\Users\\\\Tsolis\\\\AppData\\\\Local\\\\miniconda3\\\\envs\\\\cad-reconstructor\\\\python.exe'' ''debug_geom.py'' ''tests\\\\test_models\\\\testpart2.STEP''\")",
+      "Bash(powershell.exe -NonInteractive -Command \"Set-Location ''c:\\\\Users\\\\Tsolis\\\\Documents\\\\GitRepos\\\\Solidworks-Part-Generator''; $output = & ''C:\\\\Users\\\\Tsolis\\\\AppData\\\\Local\\\\miniconda3\\\\envs\\\\cad-reconstructor\\\\python.exe'' ''debug_geom.py'' ''tests\\\\test_models\\\\testpart2.STEP'' 2>&1; $output | Out-File ''C:\\\\Users\\\\Tsolis\\\\AppData\\\\Local\\\\Temp\\\\debug_geom2.txt''; Write-Host ''Done''\")",
+      "Bash(cmd.exe /c \"cd /d c:\\\\Users\\\\Tsolis\\\\Documents\\\\GitRepos\\\\Solidworks-Part-Generator && C:\\\\Users\\\\Tsolis\\\\AppData\\\\Local\\\\miniconda3\\\\envs\\\\cad-reconstructor\\\\python.exe debug_geom.py tests\\\\test_models\\\\testpart2.STEP 1>C:\\\\Users\\\\Tsolis\\\\AppData\\\\Local\\\\Temp\\\\debug_geom2.txt 2>&1\")",
+      "Bash(echo \"exit: $?\")",
+      "Bash(\"/c/Users/Tsolis/AppData/Local/miniconda3/envs/cad-reconstructor/python.exe\" -c \":*)",
+      "Bash(\"/c/Users/Tsolis/AppData/Local/miniconda3/envs/cad-reconstructor/python.exe\" -c \"print\\(''hello''\\)\")",
+      "Bash(\"/c/Users/Tsolis/AppData/Local/miniconda3/envs/cad-reconstructor/python.exe\" \"c:/Users/Tsolis/Documents/GitRepos/Solidworks-Part-Generator/debug_quick.py\")",
+      "Bash(\"/c/Users/Tsolis/AppData/Local/miniconda3/envs/cad-reconstructor/python.exe\" debug_quick.py)",
+      "Bash(\"/c/Users/Tsolis/AppData/Local/miniconda3/envs/cad-reconstructor/python.exe\" \"c:\\\\Users\\\\Tsolis\\\\Documents\\\\GitRepos\\\\Solidworks-Part-Generator\\\\debug_quick.py\")",
+      "Bash(\"/c/Users/Tsolis/AppData/Local/miniconda3/envs/cad-reconstructor/python.exe\" \"/c/Users/Tsolis/Documents/GitRepos/Solidworks-Part-Generator/debug_quick.py\")",
+      "Bash(\"/c/Users/Tsolis/AppData/Local/miniconda3/envs/cad-reconstructor/python.exe\" /tmp/debug_quick.py)",
+      "Bash(\"/c/Users/Tsolis/AppData/Local/miniconda3/envs/cad-reconstructor/python.exe\" /tmp/t2.py)"
     ]
   }
 }
