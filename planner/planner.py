@@ -9,7 +9,10 @@ import json
 import logging
 import re
 
-import anthropic
+try:
+    import anthropic as _anthropic
+except ImportError:
+    _anthropic = None  # type: ignore[assignment]
 
 from models.geometry import PartGeometry
 from models.operations import Operation, OperationType, ReconstructionPlan, SketchPlane
@@ -87,7 +90,12 @@ class ClaudePlanner:
     """Sends geometry to Claude and returns a ReconstructionPlan."""
 
     def __init__(self, api_key: str, model: str):
-        self._client = anthropic.Anthropic(api_key=api_key)
+        if _anthropic is None:
+            raise ImportError(
+                "The 'anthropic' package is required for --planner api. "
+                "Install it with: pip install anthropic"
+            )
+        self._client = _anthropic.Anthropic(api_key=api_key)
         self._model = model
 
     def plan(self, geometry: PartGeometry) -> ReconstructionPlan:

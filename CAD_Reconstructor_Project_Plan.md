@@ -12,10 +12,9 @@ This document is a complete project plan for building a Python application that 
 
 1. **Ingests** a STEP (`.step`/`.stp`) CAD file
 2. **Extracts** all geometric data — faces, edges, dimensions, topology, feature types
-3. **Sends** a structured geometry description to Claude via the Anthropic API
-4. **Receives** a reconstruction plan — an ordered sequence of SolidWorks modeling operations
-5. **Executes** the plan through the SolidWorks COM API to produce a new `.sldprt` with a clean feature tree
-6. **Validates** the new model against the original by comparing volume, bounding box, and surface deviation
+3. **Plans** a reconstruction sequence algorithmically from the extracted geometry (no AI API required)
+4. **Executes** the plan through the SolidWorks COM API to produce a new `.sldprt` with a clean feature tree
+5. **Validates** the new model against the original by comparing volume, bounding box, and surface deviation
 
 ### Why This Matters
 
@@ -32,7 +31,7 @@ This version supports **STEP files only**. Support for SLDPRT, IGES, STL, and ot
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                      User Interface                      │
-│              (CLI first, Streamlit later)                 │
+│              (CLI: main.py with rich output)             │
 └──────────────┬──────────────────────────┬───────────────┘
                │                          │
                ▼                          ▼
@@ -43,9 +42,13 @@ This version supports **STEP files only**. Support for SLDPRT, IGES, STL, and ot
            │                              │
            ▼                              │
 ┌──────────────────────┐   ┌──────────────┴───────────────┐
-│  Claude Planner      │   │   SolidWorks Executor        │
-│  (Anthropic API)     │──▶│   (pywin32 COM automation)   │
+│  Algorithmic Planner │   │   SolidWorks Executor        │
+│  (rule-based, local) │──▶│   (pywin32 COM automation)   │
 └──────────────────────┘   └──────────────────────────────┘
+         ▲ default
+         │ optional fallbacks:
+         │  --planner api    (Claude API, requires key)
+         │  --planner manual (copy/paste from claude.ai)
 ```
 
 ### Module Breakdown
@@ -54,7 +57,8 @@ This version supports **STEP files only**. Support for SLDPRT, IGES, STL, and ot
 |--------|---------|----------------|
 | `geometry_extractor` | `extractor/step_extractor.py` | Parse STEP files, extract structured geometry data |
 | `feature_recognition` | `extractor/feature_recognition.py` | Detect high-level features from raw geometry |
-| `claude_planner` | `planner/planner.py`, `planner/prompts.py` | Send geometry to Claude, receive reconstruction plan |
+| `algorithmic_planner` | `planner/algorithmic_planner.py` | Derive reconstruction plan from geometry (no API) |
+| `claude_planner` | `planner/planner.py`, `planner/prompts.py` | Optional: send geometry to Claude API, receive plan |
 | `sw_executor` | `executor/sw_connection.py`, `executor/operations.py` | Connect to SolidWorks, execute rebuild operations |
 | `validator` | `validator/compare.py` | Compare original and rebuilt models |
 | `models` | `models/geometry.py`, `models/operations.py` | Shared data classes for geometry and operations |
@@ -300,26 +304,31 @@ This sub-module sits inside the extractor and does higher-level analysis before 
 - Pattern detection: find repeated features, check if spacing is uniform
 - Symmetry: reflect face centroids across candidate planes, check for matches within tolerance
 
-### 4.3 Claude Planner
+### 4.3 Algorithmic Planner
 
-**Library:** `anthropic` Python SDK
+**File:** `planner/algorithmic_planner.py`
+
+**No API key, no internet, no external dependencies.** Derives the full `ReconstructionPlan` from the `PartGeometry` object using rule-based geometry analysis.
 
 **What it does:**
-- Serialize the `PartGeometry` object to a structured text/JSON prompt
-- Send to Claude with a carefully designed system prompt (see Section 5)
-- Parse Claude's response into a `ReconstructionPlan`
 
-**Critical design decisions:**
+1. **Classifies the part** as prismatic (extrude-based) or turned (revolve-based) by checking the fraction of cylindrical face area and whether rotational symmetry planes were detected.
 
-1. **Output format:** Have Claude return JSON conforming to the `ReconstructionPlan` schema. Use a schema definition in the prompt so Claude knows exactly what structure to produce.
+2. **Selects the base plane** (front/top/right) using area-weighted voting across all planar face normals — the plane whose axis has the most face area wins.
 
-2. **Iterative refinement:** For complex parts, consider a two-pass approach:
-   - Pass 1: Claude produces a high-level strategy ("this is a turned part, start with a revolve of the outer profile, then add holes and slots")
-   - Pass 2: Claude produces the detailed operation sequence
+3. **Extracts the sketch profile** from the actual face boundary edges of the largest planar face perpendicular to the extrude direction. Falls back to a bounding-box rectangle when edge data is unavailable.
 
-3. **Context window management:** Large parts may have hundreds of faces. Summarize where possible — instead of listing 200 individual faces, group them: "48 planar faces, 12 cylindrical faces (radii: 5mm ×4, 10mm ×4, 3mm ×4), 8 toroidal faces (fillet R=2mm)". Send the detailed feature list, not raw face-by-face data.
+4. **Builds revolve profiles** from cylindrical face radii and axial positions, constructing a stepped cross-section.
 
-4. **Model choice:** Use `claude-sonnet-4-20250514` for the planning calls. It's fast and capable enough for structured reasoning about geometry. Switch to Opus if you find Sonnet struggles with complex parts.
+5. **Emits hole_wizard operations** for each detected hole, computing the entry face point from the bounding box and hole axis direction.
+
+6. **Emits patterns** (linear/circular) referencing the seed hole of each group.
+
+7. **Emits chamfers then fillets** in the correct order (fillets always last).
+
+**Optional: Claude API planner** (`--planner api`)
+
+`planner/planner.py` contains `ClaudePlanner` which sends geometry to the Anthropic API. The `anthropic` package is imported with a try/except guard — it can be omitted from the install if not using API mode. Activated with `--planner api` and requires `ANTHROPIC_API_KEY`.
 
 ### 4.4 SolidWorks Executor
 
@@ -392,9 +401,9 @@ sketch_mgr = part.SketchManager
 
 ---
 
-## 5. Claude Prompt Engineering
+## 5. Claude Prompt Engineering (Optional — `--planner api` only)
 
-This is one of the most critical parts of the project. The quality of the reconstruction depends heavily on how you prompt Claude.
+This section applies only when using the optional Claude API planner (`--planner api`). The default algorithmic planner does not use any of this.
 
 ### 5.1 System Prompt
 
@@ -577,8 +586,9 @@ cad-reconstructor/
 │
 ├── planner/
 │   ├── __init__.py
-│   ├── planner.py                  # Send geometry to Claude, get plan
-│   └── prompts.py                  # System prompt and user prompt templates
+│   ├── algorithmic_planner.py      # Default: rule-based plan from geometry (no API)
+│   ├── planner.py                  # Optional: send geometry to Claude API, get plan
+│   └── prompts.py                  # System prompt and user prompt templates (API mode)
 │
 ├── executor/
 │   ├── __init__.py
@@ -618,10 +628,11 @@ Build the project in this sequence. Each phase produces something testable.
 6. Add symmetry detection
 7. **Test:** run on increasingly complex STEP files, verify detected features match what you see in a CAD viewer
 
-### Phase 3: Claude Integration (Week 2-3)
-8. Implement `planner/prompts.py` — system prompt and user prompt template
-9. Implement `planner/planner.py` — serialize geometry, call Claude API, parse response
-10. **Test:** send extracted geometry from Phase 2 test parts to Claude, review the reconstruction plans manually. Iterate on the prompt until plans look correct.
+### Phase 3: Algorithmic Planner (Week 2-3)
+8. Implement `planner/algorithmic_planner.py` — classify part, select base plane, extract profile, emit operations
+9. **Test:** run `python main.py part.step --no-execute --output plan.json` on test parts, review plans manually
+10. Iterate on classification heuristics and profile extraction quality
+11. *Optional:* `planner/planner.py` + `planner/prompts.py` already exist for `--planner api` fallback if needed
 
 ### Phase 4: SolidWorks Executor (Week 3-4)
 11. Implement `executor/sw_connection.py` — connect to SolidWorks
@@ -656,19 +667,19 @@ numpy
 # SolidWorks COM automation (Windows only)
 pywin32
 
-# Claude API
-anthropic
-
 # Utilities
-pydantic        # optional: use instead of dataclasses for validation
 rich            # pretty CLI output
+
+# Optional: only needed for --planner api
+# pip install anthropic
 ```
 
 **Environment notes:**
 - This project runs on **Windows only** (SolidWorks is Windows-only)
 - Use **conda** for the environment (pythonocc-core doesn't install well via pip)
 - SolidWorks must be installed and licensed on the machine
-- You need an Anthropic API key in `config.py` or as an environment variable
+- **No API key is required** for standard use — the algorithmic planner runs entirely locally
+- `ANTHROPIC_API_KEY` is only needed if using `--planner api`
 - The geometry extractor (pythonOCC) works standalone without SolidWorks, so you can develop and test extraction on any machine — but execution requires SolidWorks
 
 ---
@@ -677,12 +688,13 @@ rich            # pretty CLI output
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| Feature recognition misses features | Claude gets incomplete data, produces bad plan | Start with simple parts; iterate on recognition logic; let Claude flag "I see faces I can't explain" |
-| Claude produces invalid operation sequence | Executor fails or produces wrong geometry | Validate plan before execution (check references exist, dimensions are positive, etc.); add retry with error context |
+| Feature recognition misses features | Planner has incomplete data, produces bad plan | Start with simple parts; iterate on recognition logic |
+| Algorithmic planner misclassifies part type | Wrong base operation (extrude vs revolve) | Review generated plan with `--no-execute --output plan.json` before executing |
+| Sketch profile extraction fails | Falls back to bounding-box rectangle | Acceptable for simple parts; improve edge extraction for complex profiles |
+| Chamfer size not measured | Placeholder 1.0 mm used | User must verify and adjust chamfer distance after reconstruction |
 | SolidWorks API calls fail silently | Missing features in rebuilt part | Check feature tree after every operation; log and report failures |
-| Complex freeform surfaces (B-spline) | Can't be recreated with simple features | Detect and warn user; skip freeform parts in MVP; possibly use loft/sweep for simpler curved surfaces |
-| STEP files with multiple solid bodies | Out of scope for single-part reconstruction | Detect multi-body STEP files and reject with a clear message; handle single solid bodies only |
-| Large parts overwhelm Claude's context | Truncated or confused responses | Summarize/aggregate face data; use feature-level descriptions not face-level where possible |
+| Complex freeform surfaces (B-spline) | Can't be recreated with simple features | Detect and warn user; skip freeform parts in MVP |
+| STEP files with multiple solid bodies | Out of scope for single-part reconstruction | Detect multi-body STEP files and reject with a clear message |
 | STEP files with missing or incomplete data | Extractor can't build full geometry picture | Validate the parsed shape before proceeding; warn user if the STEP file appears incomplete |
 
 ---
@@ -707,11 +719,12 @@ rich            # pretty CLI output
 - [ ] Install Anaconda/Miniconda
 - [ ] Create conda environment: `conda create -n cad-reconstructor python=3.11`
 - [ ] Install pythonocc: `conda install -c conda-forge pythonocc-core`
-- [ ] Install pip packages: `pip install anthropic pywin32 numpy rich`
-- [ ] Set `ANTHROPIC_API_KEY` environment variable
+- [ ] Install pip packages: `pip install pywin32 numpy rich`
 - [ ] Verify SolidWorks is installed and launchable
-- [ ] Create project directory structure (Section 6)
 - [ ] Find or create 3-5 simple STEP test files (box, cylinder, bracket, plate with holes)
-- [ ] Begin Phase 1 implementation
+- [ ] Test extraction + planning: `python main.py part.step --no-execute --output plan.json`
+- [ ] Review `plan.json`, then run full pipeline with SolidWorks open
 
-**Tip:** You can develop and test Phases 1-3 (extraction, feature recognition, Claude planning) on any machine — even without SolidWorks. You only need SolidWorks on the machine for Phase 4 onward.
+**Optional:** `pip install anthropic` and set `ANTHROPIC_API_KEY` only if you want to use `--planner api` for complex parts.
+
+**Tip:** You can develop and test Phases 1-3 (extraction, feature recognition, planning) on any machine — even without SolidWorks. You only need SolidWorks for Phase 4 onward.

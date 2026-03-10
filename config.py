@@ -1,6 +1,6 @@
 import os
 
-# Anthropic API
+# Anthropic API — only required when using --planner api
 ANTHROPIC_API_KEY: str = os.environ.get("ANTHROPIC_API_KEY", "")
 
 # Claude model to use for reconstruction planning

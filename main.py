@@ -21,7 +21,8 @@ from rich import print as rprint
 import config
 from extractor.step_extractor import StepExtractor
 from extractor.feature_recognition import FeatureRecognizer
-from planner.planner import ClaudePlanner, parse_plan_json
+from planner.algorithmic_planner import AlgorithmicPlanner
+from planner.planner import parse_plan_json
 from planner.prompts import build_user_prompt
 from executor.sw_connection import SolidWorksConnection
 from executor.operations import SolidWorksExecutor
@@ -41,13 +42,18 @@ def main():
         help="Extract geometry and generate plan only; skip SolidWorks execution.",
     )
     parser.add_argument(
-        "--manual",
-        action="store_true",
+        "--planner",
+        default="auto",
+        choices=["auto", "api", "manual"],
         help=(
-            "Manual mode: print the prompt for Claude.ai, then wait for you to "
-            "paste the JSON response. No API key required."
+            "Planning backend to use. "
+            "'auto' (default): algorithmic rule-based planner, no internet or API key required. "
+            "'api': Claude API (requires ANTHROPIC_API_KEY). "
+            "'manual': print prompt and wait for you to paste JSON from claude.ai."
         ),
     )
+    # --manual kept for backward compatibility
+    parser.add_argument("--manual", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--output",
         metavar="FILE",
@@ -105,16 +111,25 @@ def main():
         console.print("[yellow]No high-level features detected.[/yellow]")
 
     # ------------------------------------------------------------------
-    # Phase 3: Planning (API or manual)
+    # Phase 3: Planning
     # ------------------------------------------------------------------
-    if args.manual:
-        plan = _plan_manual(geometry)
-    else:
+    # --manual flag maps to manual planner for backward compatibility
+    planner_mode = "manual" if args.manual else args.planner
+
+    if planner_mode == "auto":
+        with console.status("Generating reconstruction plan (algorithmic)..."):
+            try:
+                plan = AlgorithmicPlanner().plan(geometry)
+            except Exception as e:
+                console.print(f"[red]Planning failed:[/red] {e}")
+                sys.exit(1)
+
+    elif planner_mode == "api":
+        from planner.planner import ClaudePlanner
         if not config.ANTHROPIC_API_KEY:
             console.print(
                 "[red]Error:[/red] ANTHROPIC_API_KEY is not set.\n"
-                "Either set the environment variable, or use [bold]--manual[/bold] mode "
-                "to paste the plan from Claude.ai."
+                "Remove [bold]--planner api[/bold] to use the algorithmic planner instead."
             )
             sys.exit(1)
         with console.status("Sending geometry to Claude API for reconstruction planning..."):
@@ -124,6 +139,9 @@ def main():
             except Exception as e:
                 console.print(f"[red]Planning failed:[/red] {e}")
                 sys.exit(1)
+
+    else:  # manual
+        plan = _plan_manual(geometry)
 
     _print_plan_summary(plan)
 
