@@ -528,18 +528,57 @@ def _extract_sketch_profile(
         circle_edges = [e for e in face_edges if e.edge_type == ET.CIRCLE and e.radius]
         line_edges   = [e for e in face_edges if e.edge_type == ET.LINE]
 
+        if line_edges:
+            # Prismatic base: line edges form the outer boundary.
+            # Any circle edges co-inhabiting this face are hole/pocket
+            # boundaries — they must NOT be mistaken for the base profile.
+            #
+            # The adjacency map can include seam edges (which collapse to a
+            # point under projection) and edges from the opposite parallel
+            # face (same 2D projection, different Y).  Clean up before use:
+            #   1. Project to 2D.
+            #   2. Drop zero-length projections (seam / axis-parallel edges).
+            #   3. Deduplicate by endpoint pair (direction-independent).
+            # If fewer than 3 valid edges remain the adjacency is incomplete;
+            # return [] so the caller uses the bounding-box rectangle fallback.
+            _SNAP = 1  # round to 1 decimal place for dedup key
+
+            def _proj2d(e):
+                if base_plane == "top":
+                    return (round(e.start_point.x, _SNAP), round(e.start_point.y, _SNAP)), \
+                           (round(e.end_point.x,   _SNAP), round(e.end_point.y,   _SNAP))
+                elif base_plane == "front":
+                    return (round(e.start_point.x, _SNAP), round(e.start_point.z, _SNAP)), \
+                           (round(e.end_point.x,   _SNAP), round(e.end_point.z,   _SNAP))
+                else:
+                    return (round(e.start_point.y, _SNAP), round(e.start_point.z, _SNAP)), \
+                           (round(e.end_point.y,   _SNAP), round(e.end_point.z,   _SNAP))
+
+            seen_keys: set = set()
+            clean_lines = []
+            for e in line_edges:
+                s, t = _proj2d(e)
+                if s == t:          # zero-length projection
+                    continue
+                key = (s, t) if s < t else (t, s)
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                clean_lines.append(e)
+
+            if len(clean_lines) >= 3:
+                ops = [_edge_to_sketch_op(e, base_plane) for e in clean_lines]
+                return [op for op in ops if op is not None]
+            # Line edges exist but adjacency is incomplete/noisy — bail out so
+            # the caller falls back to the bounding-box rectangle.  Do NOT let
+            # circle_edges (which are holes on the face) become the profile.
+            return []
+
         if circle_edges:
-            # Disc / cylindrical base: use only the outermost (largest) circle.
-            # Inner circles are boundaries of pockets/holes and must NOT be
-            # included in the base extrude profile.
+            # Pure disc base (no line edges): outermost circle is the profile.
             outer = max(circle_edges, key=lambda e: e.radius)
             op = _edge_to_sketch_op(outer, base_plane)
             return [op] if op else []
-
-        if line_edges:
-            # Prismatic base: all line edges form the outer boundary.
-            ops = [_edge_to_sketch_op(e, base_plane) for e in line_edges]
-            return [op for op in ops if op is not None]
 
         return []
 
