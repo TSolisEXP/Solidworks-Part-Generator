@@ -15,5 +15,9 @@ SOLIDWORKS_TEMPLATE_PATH: str = os.environ.get(
 # Validation: maximum allowable fractional error (0.001 = 0.1%)
 VALIDATION_TOLERANCE: float = 0.001
 
+# Ollama local LLM (free, no API key required)
+OLLAMA_URL: str = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+OLLAMA_MODEL: str = os.environ.get("OLLAMA_MODEL", "qwen2.5-coder:14b")
+
 # Logging level
 LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO")

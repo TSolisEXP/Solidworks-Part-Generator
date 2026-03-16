@@ -21,7 +21,7 @@ from rich import print as rprint
 import config
 from extractor.step_extractor import StepExtractor
 from extractor.feature_recognition import FeatureRecognizer
-from planner.planner import ClaudePlanner, parse_plan_json
+from planner.planner import ClaudePlanner, OllamaPlanner, parse_plan_json
 from planner.prompts import build_user_prompt
 from executor.sw_connection import SolidWorksConnection
 from executor.operations import SolidWorksExecutor
@@ -41,12 +41,21 @@ def main():
         help="Extract geometry and generate plan only; skip SolidWorks execution.",
     )
     parser.add_argument(
+        "--planner",
+        default="auto",
+        choices=["auto", "ollama", "api", "manual"],
+        help=(
+            "Planner to use: "
+            "'ollama' = local Ollama (free, no API key); "
+            "'api' = Claude API (requires ANTHROPIC_API_KEY); "
+            "'manual' = print prompt, paste JSON response; "
+            "'auto' = try ollama, fall back to manual (default)."
+        ),
+    )
+    parser.add_argument(
         "--manual",
         action="store_true",
-        help=(
-            "Manual mode: print the prompt for Claude.ai, then wait for you to "
-            "paste the JSON response. No API key required."
-        ),
+        help="Shorthand for --planner manual.",
     )
     parser.add_argument(
         "--output",
@@ -105,16 +114,27 @@ def main():
         console.print("[yellow]No high-level features detected.[/yellow]")
 
     # ------------------------------------------------------------------
-    # Phase 3: Planning (API or manual)
+    # Phase 3: Planning
     # ------------------------------------------------------------------
-    if args.manual:
+    planner_mode = "manual" if args.manual else args.planner
+
+    if planner_mode == "manual":
         plan = _plan_manual(geometry)
-    else:
+
+    elif planner_mode == "ollama":
+        with console.status(f"Sending geometry to Ollama ({config.OLLAMA_MODEL})..."):
+            try:
+                planner = OllamaPlanner(base_url=config.OLLAMA_URL, model=config.OLLAMA_MODEL)
+                plan = planner.plan(geometry)
+            except Exception as e:
+                console.print(f"[red]Ollama planning failed:[/red] {e}")
+                sys.exit(1)
+
+    elif planner_mode == "api":
         if not config.ANTHROPIC_API_KEY:
             console.print(
                 "[red]Error:[/red] ANTHROPIC_API_KEY is not set.\n"
-                "Either set the environment variable, or use [bold]--manual[/bold] mode "
-                "to paste the plan from Claude.ai."
+                "Either set the environment variable or use [bold]--planner ollama[/bold] / [bold]--planner manual[/bold]."
             )
             sys.exit(1)
         with console.status("Sending geometry to Claude API for reconstruction planning..."):
@@ -122,8 +142,18 @@ def main():
                 planner = ClaudePlanner(api_key=config.ANTHROPIC_API_KEY, model=config.CLAUDE_MODEL)
                 plan = planner.plan(geometry)
             except Exception as e:
-                console.print(f"[red]Planning failed:[/red] {e}")
+                console.print(f"[red]Claude API planning failed:[/red] {e}")
                 sys.exit(1)
+
+    else:  # auto: try ollama, fall back to manual
+        try:
+            console.print(f"[dim]Trying Ollama ({config.OLLAMA_MODEL}) at {config.OLLAMA_URL}...[/dim]")
+            with console.status(f"Sending geometry to Ollama ({config.OLLAMA_MODEL})..."):
+                planner = OllamaPlanner(base_url=config.OLLAMA_URL, model=config.OLLAMA_MODEL)
+                plan = planner.plan(geometry)
+        except Exception as e:
+            console.print(f"[yellow]Ollama unavailable ({e}), falling back to manual mode.[/yellow]")
+            plan = _plan_manual(geometry)
 
     _print_plan_summary(plan)
 

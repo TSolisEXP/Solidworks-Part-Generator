@@ -1,15 +1,24 @@
 """
-Claude-powered reconstruction planner.
+Reconstruction planners: Claude API and Ollama (local, free).
 
-Sends part geometry to Claude and parses the returned JSON into a
-ReconstructionPlan.  Uses Claude tool-use to enforce the schema.
+ClaudePlanner  — sends geometry to the Claude API (requires ANTHROPIC_API_KEY)
+OllamaPlanner  — sends geometry to a local Ollama instance (no API key needed)
+parse_plan_json — parse a pasted JSON string into a ReconstructionPlan
 """
 
 import json
 import logging
 import re
 
-import anthropic
+try:
+    import anthropic as _anthropic
+except ImportError:
+    _anthropic = None
+
+try:
+    import requests as _requests
+except ImportError:
+    _requests = None
 
 from models.geometry import PartGeometry
 from models.operations import Operation, OperationType, ReconstructionPlan, SketchPlane
@@ -87,7 +96,9 @@ class ClaudePlanner:
     """Sends geometry to Claude and returns a ReconstructionPlan."""
 
     def __init__(self, api_key: str, model: str):
-        self._client = anthropic.Anthropic(api_key=api_key)
+        if _anthropic is None:
+            raise ImportError("anthropic package is not installed. Run: pip install anthropic")
+        self._client = _anthropic.Anthropic(api_key=api_key)
         self._model = model
 
     def plan(self, geometry: PartGeometry) -> ReconstructionPlan:
@@ -125,6 +136,64 @@ class ClaudePlanner:
         )
         if not plan.operations:
             logger.warning("Claude returned 0 operations. Tool input:\n%s", json.dumps(data, indent=2))
+        return plan
+
+
+class OllamaPlanner:
+    """
+    Sends geometry to a local Ollama instance and returns a ReconstructionPlan.
+
+    Requires Ollama running at OLLAMA_URL (default http://localhost:11434).
+    No API key needed. Install Ollama from https://ollama.com, then run:
+        ollama pull qwen2.5-coder:14b
+    """
+
+    def __init__(self, base_url: str, model: str):
+        if _requests is None:
+            raise ImportError("requests package is not installed. Run: pip install requests")
+        self._base_url = base_url.rstrip("/")
+        self._model = model
+
+    def plan(self, geometry: PartGeometry) -> ReconstructionPlan:
+        """Call Ollama with the part geometry and return a ReconstructionPlan."""
+        user_prompt = build_user_prompt(geometry)
+
+        payload = {
+            "model": self._model,
+            "format": "json",
+            "stream": False,
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+
+        url = f"{self._base_url}/api/chat"
+        logger.info("Sending geometry to Ollama (%s) at %s ...", self._model, url)
+
+        try:
+            resp = _requests.post(url, json=payload, timeout=300)
+            resp.raise_for_status()
+        except _requests.exceptions.ConnectionError:
+            raise ConnectionError(
+                f"Could not connect to Ollama at {self._base_url}. "
+                "Make sure Ollama is running (ollama serve) and the model is pulled."
+            )
+
+        data = resp.json()
+        raw_text = data["message"]["content"]
+        logger.debug("Ollama raw response:\n%s", raw_text)
+
+        plan = _deserialize_plan(json.loads(raw_text))
+        logger.info(
+            "Plan received: %d operations for '%s'",
+            len(plan.operations),
+            plan.summary,
+        )
+        if not plan.operations:
+            logger.warning(
+                "Ollama returned 0 operations. Raw response:\n%s", raw_text
+            )
         return plan
 
 
