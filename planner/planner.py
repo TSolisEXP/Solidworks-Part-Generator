@@ -184,7 +184,7 @@ class OllamaPlanner:
         raw_text = data["message"]["content"]
         logger.debug("Ollama raw response:\n%s", raw_text)
 
-        plan = _deserialize_plan(json.loads(raw_text))
+        plan = parse_plan_json(raw_text)
         logger.info(
             "Plan received: %d operations for '%s'",
             len(plan.operations),

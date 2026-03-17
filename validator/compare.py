@@ -133,8 +133,11 @@ class ModelValidator:
         # Attempt 2: GetMassProperties on the doc (older API, returns array)
         if mass_prop is None:
             try:
+                get_mp = getattr(sw_part, "GetMassProperties", None)
+                if get_mp is None or not callable(get_mp):
+                    raise RuntimeError("GetMassProperties not available on this COM object")
                 # Returns array: [density, mass, volume, surface_area, cx, cy, cz, ...]
-                props = sw_part.GetMassProperties(0)
+                props = get_mp()
                 if props and len(props) >= 4:
                     volume_mm3 = props[2] * _M3_TO_MM3
                     surface_area_mm2 = props[3] * _M2_TO_MM2

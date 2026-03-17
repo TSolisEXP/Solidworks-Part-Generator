@@ -42,20 +42,14 @@ def main():
     )
     parser.add_argument(
         "--planner",
-        default="auto",
-        choices=["auto", "ollama", "api", "manual"],
+        default="ollama",
+        choices=["ollama", "api", "manual"],
         help=(
             "Planner to use: "
-            "'ollama' = local Ollama (free, no API key); "
+            "'ollama' = local Ollama (free, no API key, default); "
             "'api' = Claude API (requires ANTHROPIC_API_KEY); "
-            "'manual' = print prompt, paste JSON response; "
-            "'auto' = try ollama, fall back to manual (default)."
+            "'manual' = print prompt, paste JSON response."
         ),
-    )
-    parser.add_argument(
-        "--manual",
-        action="store_true",
-        help="Shorthand for --planner manual.",
     )
     parser.add_argument(
         "--output",
@@ -116,7 +110,7 @@ def main():
     # ------------------------------------------------------------------
     # Phase 3: Planning
     # ------------------------------------------------------------------
-    planner_mode = "manual" if args.manual else args.planner
+    planner_mode = args.planner
 
     if planner_mode == "manual":
         plan = _plan_manual(geometry)
@@ -128,6 +122,10 @@ def main():
                 plan = planner.plan(geometry)
             except Exception as e:
                 console.print(f"[red]Ollama planning failed:[/red] {e}")
+                console.print(
+                    "[yellow]Make sure Ollama is running ([bold]ollama serve[/bold]) "
+                    f"and the model is pulled ([bold]ollama pull {config.OLLAMA_MODEL}[/bold]).[/yellow]"
+                )
                 sys.exit(1)
 
     elif planner_mode == "api":
@@ -144,16 +142,6 @@ def main():
             except Exception as e:
                 console.print(f"[red]Claude API planning failed:[/red] {e}")
                 sys.exit(1)
-
-    else:  # auto: try ollama, fall back to manual
-        try:
-            console.print(f"[dim]Trying Ollama ({config.OLLAMA_MODEL}) at {config.OLLAMA_URL}...[/dim]")
-            with console.status(f"Sending geometry to Ollama ({config.OLLAMA_MODEL})..."):
-                planner = OllamaPlanner(base_url=config.OLLAMA_URL, model=config.OLLAMA_MODEL)
-                plan = planner.plan(geometry)
-        except Exception as e:
-            console.print(f"[yellow]Ollama unavailable ({e}), falling back to manual mode.[/yellow]")
-            plan = _plan_manual(geometry)
 
     _print_plan_summary(plan)
 

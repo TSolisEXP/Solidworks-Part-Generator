@@ -480,65 +480,88 @@ class SolidWorksExecutor:
         wiz_type = {"simple": 0, "counterbore": 1, "countersink": 2, "tapped": 3}.get(hole_type, 0)
 
         # SW Hole Wizard workflow:
-        #   1. Ensure no sketch is open (only close if one is actually active)
-        #   2. Select the target face by coordinates
+        #   1. Ensure no sketch is open
+        #   2. Select target face by coordinates (try multiple candidates)
         #   3. Call HoleWizard5 — SW auto-opens a position sketch
         #   4. Place a sketch point at the desired hole location
         #   5. Close the position sketch
 
-        # 1. Close only if a sketch is currently active (InsertSketch(True) would
-        #    OPEN a sketch when not in edit mode — do not call it unconditionally).
+        # 1. Close sketch if active
         if self._smgr.ActiveSketch is not None:
             self._smgr.InsertSketch(True)
 
-        # 2. Select face: face_point is a point on the face in mm
-        fp = p.get("face_point", [0, 0, 0])
-        self._part.ClearSelection2(True)
-        ok = self._part.Extension.SelectByID2(
-            "", "FACE",
-            fp[0] * _MM, fp[1] * _MM, fp[2] * _MM,
-            False, 0, _NULL_DISPATCH, 0,
-        )
-        if not ok:
-            logger.warning("HoleWizard face_point=%s missed — trying bbox fallback", fp)
-            ok = self._select_face_via_bbox()
-        if not ok:
-            logger.warning("HoleWizard: no face selected — hole may fail")
+        # 2. Build ordered list of face point candidates (mm).
+        #    The planner's face_point is tried first; bbox-derived face centers follow
+        #    as fallbacks. SelectByID2 returning True only means *something* was selected
+        #    — it may be the wrong face. So we try HoleWizard5 after each selection and
+        #    undo + retry if it returns None.
+        face_candidates_mm = []
+        if "face_point" in p:
+            face_candidates_mm.append(p["face_point"])
+        face_candidates_mm.extend(self._bbox_face_candidates_mm())
 
-        # 3. Call HoleWizard5 — 27 parameters (confirmed working in SW 2025).
-        # Base 14 + 13 additional params required by SW 2025 (False works for basic holes).
-        feature = self._fmgr.HoleWizard5(
-            wiz_type,   # 1.  HoleType
-            0,          # 2.  Standard
-            0,          # 3.  FastenerType
-            end_cond,   # 4.  T1EndCondition
-            depth,      # 5.  T1Depth (metres)
-            diameter,   # 6.  Diameter (metres)
-            0.0,        # 7.  DrillAngle
-            0.0,        # 8.  CounterboreDiameter
-            0.0,        # 9.  CounterboreDepth
-            0.0,        # 10. CountersinkAngle
-            False,      # 11. ReverseDir
-            False,      # 12. FlipSideToMaterial
-            False,      # 13. (was ConfigName string in old API; False works in SW 2025)
-            False,      # 14. AddDim
-            False,      # 15-27: additional params required by SW 2025
-            False,      # 16
-            False,      # 17
-            False,      # 18
-            False,      # 19
-            False,      # 20
-            False,      # 21
-            False,      # 22
-            False,      # 23
-            False,      # 24
-            False,      # 25
-            False,      # 26
-            False,      # 27
-        )
+        feature = None
+        used_fp = None
+        for fp in face_candidates_mm:
+            self._part.ClearSelection2(True)
+            ok = self._part.Extension.SelectByID2(
+                "", "FACE",
+                fp[0] * _MM, fp[1] * _MM, fp[2] * _MM,
+                False, 0, _NULL_DISPATCH, 0,
+            )
+            if not ok:
+                logger.debug("HoleWizard face_point=%s: SelectByID2 returned False, skipping", fp)
+                continue
+
+            # 3. Try HoleWizard5 with this face selected.
+            feature = self._fmgr.HoleWizard5(
+                wiz_type,   # 1.  HoleType
+                0,          # 2.  Standard
+                0,          # 3.  FastenerType
+                end_cond,   # 4.  T1EndCondition
+                depth,      # 5.  T1Depth (metres)
+                diameter,   # 6.  Diameter (metres)
+                0.0,        # 7.  DrillAngle
+                0.0,        # 8.  CounterboreDiameter
+                0.0,        # 9.  CounterboreDepth
+                0.0,        # 10. CountersinkAngle
+                False,      # 11. ReverseDir
+                False,      # 12. FlipSideToMaterial
+                False,      # 13. (was ConfigName string in old API; False works in SW 2025)
+                False,      # 14. AddDim
+                False,      # 15-27: additional params required by SW 2025
+                False,      # 16
+                False,      # 17
+                False,      # 18
+                False,      # 19
+                False,      # 20
+                False,      # 21
+                False,      # 22
+                False,      # 23
+                False,      # 24
+                False,      # 25
+                False,      # 26
+                False,      # 27
+            )
+
+            if feature is not None:
+                used_fp = fp
+                break
+
+            # Wrong face selected — undo and try the next candidate.
+            logger.debug("HoleWizard5 returned None for face_point=%s — trying next candidate", fp)
+            try:
+                self._part.EditUndo2(1)
+            except Exception:
+                pass
 
         if feature is None:
-            raise RuntimeError("HoleWizard5 returned None — face may not have been selected.")
+            raise RuntimeError(
+                "HoleWizard5 returned None for all face candidates — "
+                "could not find a valid face to drill into."
+            )
+
+        logger.info("HoleWizard5 succeeded with face_point=%s", used_fp)
 
         # 4. After HoleWizard5, SW opens a position sketch — add a point for the hole center
         try:
@@ -627,38 +650,39 @@ class SolidWorksExecutor:
         rename_feature(feature, op.description or f"Mirror {', '.join(feature_refs)}")
         return f"Mirror of {feature_refs} across {plane}"
 
-    def _select_face_via_bbox(self) -> bool:
+    def _bbox_face_candidates_mm(self) -> list:
         """
-        Fallback face selector: probe the six face-center candidates derived from
-        the part's bounding box and return True on the first successful selection.
-        Used when the planner's face_point misses the actual geometry.
+        Return the six face-center candidates (in mm) derived from the current
+        part's bounding box.  Used as fallback face_points for HoleWizard.
+        GetBox returns [xMin, yMin, zMin, xMax, yMax, zMax] in metres.
         """
         try:
-            box = self._part.GetBox(0)  # returns [xMin,yMin,zMin,xMax,yMax,zMax] in metres
+            # Try GetBox with body index 0, then without argument (API varies by SW version)
+            box = None
+            for call in (lambda: self._part.GetBox(0), lambda: self._part.GetBox(1), lambda: self._part.GetBox()):
+                try:
+                    box = call()
+                    if box and len(box) >= 6:
+                        break
+                except Exception:
+                    box = None
             if not box or len(box) < 6:
-                return False
-            xMin, yMin, zMin, xMax, yMax, zMax = box[:6]
+                return []
+            xMin, yMin, zMin, xMax, yMax, zMax = [v * 1e3 for v in box[:6]]  # → mm
             xMid = (xMin + xMax) / 2
             yMid = (yMin + yMax) / 2
             zMid = (zMin + zMax) / 2
-            candidates = [
-                (xMid, yMax, zMid),  # top
-                (xMax, yMid, zMid),  # front (extrusion face)
-                (xMid, yMid, zMax),  # right
-                (xMid, yMin, zMid),  # bottom
-                (xMin, yMid, zMid),  # back
-                (xMid, yMid, zMin),  # left
+            return [
+                [xMid, yMax, zMid],  # top face
+                [xMid, yMin, zMid],  # bottom face
+                [xMax, yMid, zMid],  # +X face
+                [xMin, yMid, zMid],  # -X face
+                [xMid, yMid, zMax],  # +Z face
+                [xMid, yMid, zMin],  # -Z face
             ]
-            for cx, cy, cz in candidates:
-                ok = self._part.Extension.SelectByID2(
-                    "", "FACE", cx, cy, cz, False, 0, _NULL_DISPATCH, 0
-                )
-                if ok:
-                    logger.info("HoleWizard bbox fallback selected face near (%g, %g, %g)", cx, cy, cz)
-                    return True
         except Exception as e:
-            logger.warning("_select_face_via_bbox failed: %s", e)
-        return False
+            logger.warning("_bbox_face_candidates_mm failed: %s", e)
+            return []
 
     def _shell(self, op: Operation) -> str:
         p = op.parameters

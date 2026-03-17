@@ -16,12 +16,18 @@ well-organized feature tree.
 PRINCIPLES:
 - Start with the largest/most defining feature as the base (usually an extrusion
   or revolution)
+- READ the "Body Shape" section of the input carefully. If it says RECTANGULAR, use
+  sketch_rectangle for the base sketch — NEVER sketch_circle. If it says CYLINDRICAL,
+  use sketch_circle for the base.
+- Use the bounding box dimensions directly for sketch sizes (e.g. rectangle corners)
 - Use sketch planes and references that make geometric sense (not arbitrary)
 - Prefer symmetric sketches centered on the origin when the part has symmetry
 - Use patterns (linear, circular) instead of repeating individual features
 - Use mirror features when the part has mirror symmetry
 - Add fillets and chamfers LAST (they depend on edges from earlier features)
 - Add holes after the main body is established
+- For hole_wizard: ALWAYS use the "suggested_face_point" value from the detected feature.
+  Do NOT invent face_point coordinates.
 - Dimension sketches fully — no under-constrained geometry
 - Name every feature descriptively
 
@@ -158,6 +164,10 @@ def build_user_prompt(geometry: PartGeometry) -> str:
     bb_max = geometry.bounding_box_max
     com = geometry.center_of_mass
 
+    dx = bb_max.x - bb_min.x
+    dy = bb_max.y - bb_min.y
+    dz = bb_max.z - bb_min.z
+
     # Face summary
     face_type_counts = Counter(f.face_type for f in geometry.faces)
     planar_count = face_type_counts.get(FaceType.PLANAR, 0)
@@ -194,20 +204,48 @@ def build_user_prompt(geometry: PartGeometry) -> str:
         else "No symmetry detected."
     )
 
-    features_json = json.dumps(geometry.detected_features, indent=2) if geometry.detected_features else "[]"
+    # Derive the likely base body shape from face counts
+    if planar_count >= 6 and cyl_count == 0:
+        body_shape = (
+            f"RECTANGULAR/PRISMATIC BODY — {planar_count} planar faces, no cylindrical faces. "
+            f"Model as sketch_rectangle ({dx:.2f} mm × {dz:.2f} mm) on top plane, extrude {dy:.2f} mm."
+        )
+    elif planar_count >= 6 and cyl_count > 0:
+        body_shape = (
+            f"RECTANGULAR BODY with cylindrical features — {planar_count} planar + {cyl_count} cylindrical faces. "
+            f"Base body is a rectangular block ({dx:.2f} × {dy:.2f} × {dz:.2f} mm). "
+            f"Do NOT use a circle for the base sketch. Use sketch_rectangle."
+        )
+    elif cyl_count >= planar_count and planar_count <= 2:
+        body_shape = (
+            f"CYLINDRICAL BODY — {cyl_count} cylindrical faces, {planar_count} planar faces. "
+            f"Model as sketch_circle, revolve_boss, or extrude of circle profile."
+        )
+    else:
+        body_shape = f"MIXED — {planar_count} planar, {cyl_count} cylindrical, {tor_count} toroidal faces."
+
+    # Augment detected features with computed face_point hints for holes
+    features_with_hints = _augment_hole_face_points(geometry.detected_features, bb_min, bb_max)
+    features_json = json.dumps(features_with_hints, indent=2) if features_with_hints else "[]"
 
     return f"""\
 Analyze the following part geometry and produce a reconstruction plan.
 
-## Part Information
+## Part Dimensions
 - File: {geometry.file_name}
 - Bounding box: ({bb_min.x:.3f}, {bb_min.y:.3f}, {bb_min.z:.3f}) to ({bb_max.x:.3f}, {bb_max.y:.3f}, {bb_max.z:.3f}) mm
+- Dimensions: {dx:.3f} mm (X) × {dy:.3f} mm (Y) × {dz:.3f} mm (Z)
 - Volume: {geometry.volume:.3f} mm³
 - Surface area: {geometry.surface_area:.3f} mm²
 - Center of mass: ({com.x:.3f}, {com.y:.3f}, {com.z:.3f}) mm
 
+## Body Shape
+{body_shape}
+
 ## Detected Features
 {features_json}
+Note: "suggested_face_point" on each hole is a reliable point on the correct face for hole_wizard's face_point parameter.
+      Use this value directly — do not invent your own face_point.
 
 ## Face Summary
 - Total faces: {len(geometry.faces)}
@@ -227,6 +265,38 @@ Analyze the following part geometry and produce a reconstruction plan.
 
 Produce the reconstruction plan as JSON.
 """
+
+
+def _augment_hole_face_points(features: list, bb_min, bb_max) -> list:
+    """
+    For each hole feature, compute a 'suggested_face_point' — a point that lies
+    cleanly on the center of the entry face, derived from the bounding box and
+    hole axis. This is more reliable than letting the LLM guess coordinates.
+    """
+    result = []
+    for feat in features:
+        f = dict(feat)
+        if feat.get("type") in ("through_hole", "blind_hole") and "axis" in feat and "center" in feat:
+            ax = feat["axis"]
+            cx, cy, cz = feat["center"]
+            xmid = (bb_min.x + bb_max.x) / 2
+            ymid = (bb_min.y + bb_max.y) / 2
+            zmid = (bb_min.z + bb_max.z) / 2
+
+            if abs(ax[0]) >= 0.7:      # hole axis ≈ X
+                # entry face: +X or -X wall; face center is at that X, mid Y and Z
+                entry_x = bb_min.x if cx <= xmid else bb_max.x
+                f["suggested_face_point"] = [round(entry_x, 3), round(ymid, 3), round(zmid, 3)]
+            elif abs(ax[1]) >= 0.7:    # hole axis ≈ Y
+                # entry face: +Y or -Y wall; use bottom face (bb_min.y)
+                # position on face: hole's X, bottom Y, face Z-center
+                f["suggested_face_point"] = [round(cx, 3), round(bb_min.y, 3), round(zmid, 3)]
+            else:                       # hole axis ≈ Z
+                # entry face: +Z or -Z wall
+                entry_z = bb_min.z if cz <= zmid else bb_max.z
+                f["suggested_face_point"] = [round(xmid, 3), round(ymid, 3), round(entry_z, 3)]
+        result.append(f)
+    return result
 
 
 def _unique_vectors(vectors) -> list:
